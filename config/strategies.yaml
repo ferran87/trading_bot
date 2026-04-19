@@ -1,0 +1,62 @@
+# Per-strategy knobs. Each bot references one strategy by `name`.
+
+bots:
+  - id: 1
+    name: Conservative
+    strategy: etf_momentum
+    enabled: true
+
+  - id: 2
+    name: Moderate
+    strategy: mean_reversion
+    enabled: false        # wired in Phase 2
+
+  - id: 3
+    name: Aggressive
+    strategy: news_sentiment
+    enabled: false        # wired in Phase 3
+
+
+strategies:
+
+  etf_momentum:
+    universe: etfs_ucits
+    lookback_days: 63                # 3 trading months
+    top_n: 3                         # hold top 3 equal-weighted
+    rebalance_weekday: 0             # 0 = Monday
+    trend_filter: true               # go to 100% cash if all top_n have negative return
+    min_history_days: 70             # need > lookback days of data before trading
+
+  mean_reversion:
+    universe: [stocks_us, stocks_eu]
+    rsi_period: 14
+    rsi_entry_below: 30
+    rsi_exit_above: 55
+    profit_target_pct: 0.05
+    stop_loss_pct: 0.07
+    max_days_held: 10
+    max_concurrent: 5
+    per_position_pct: 0.20
+
+  news_sentiment:
+    universe: [stocks_us, stocks_eu]
+    crypto_universe: crypto_etps
+    rss_template: "https://finance.yahoo.com/rss/headline?s={ticker}"
+    sentiment_model: claude-haiku-4-5-20251001
+    sentiment_threshold: 2.0
+    min_headlines: 3
+    anomaly:
+      volume_zscore: 2.0
+      volume_window: 20
+      gap_pct: 0.03
+    sizing:
+      base_pct: 0.15
+      per_sentiment_point: 0.025      # size_pct = 15 + 2.5*(s-2)
+      cap_pct: 0.20
+    exit:
+      max_days_held: 5
+      move_pct: 0.08
+    crypto:
+      rotation_weekday: 0             # Monday
+      lookback_days: 7
+      sleeve_pct: 0.10

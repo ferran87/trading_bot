@@ -1,0 +1,52 @@
+# Global settings — not per-strategy. Strategy knobs live in strategies.yaml.
+
+base_currency: EUR
+
+# Broker backend is picked from the BROKER_BACKEND env var.
+# Values: "mock" | "ibkr".
+broker:
+  mock:
+    # MockBroker fills at the next bar's open price, adds random slippage
+    # within [-slippage_bps, +slippage_bps].
+    slippage_bps: 5                   # 5 bps = 0.05%
+    fill_latency_bars: 1              # fill on the next bar
+
+  ibkr:
+    host_env: IBKR_HOST
+    port_env: IBKR_PORT
+    client_id_base_env: IBKR_CLIENT_ID_BASE
+    order_timeout_sec: 30
+    reconnect_attempts: 3
+
+# Fee model used by risk.py's fee-aware skip AND by the executor to stamp
+# each recorded fill. Refined later with real IBKR fills.
+fees:
+  # Applied per *venue*. Keyed by ticker suffix / currency.
+  xetra_eur:       { per_trade_eur: 1.25, pct: 0.0005, min_eur: 1.25 }   # EU UCITS on Xetra
+  lse_gbp:         { per_trade_eur: 3.00, pct: 0.0005, min_eur: 3.00 }   # LSE listings (GBP)
+  nasdaq_usd:      { per_trade_eur: 1.00, pct: 0.0, min_eur: 1.00 }      # US (paper only until PRIIPs KID exists)
+  nyse_usd:        { per_trade_eur: 1.00, pct: 0.0, min_eur: 1.00 }
+  crypto_etp_eur:  { per_trade_eur: 2.50, pct: 0.0010, min_eur: 2.50 }   # BTCE / ZETH on Xetra
+
+# FX reference for dashboard reporting. yfinance pair codes.
+fx:
+  pairs:
+    USD: EURUSD=X
+    GBP: EURGBP=X
+    CHF: EURCHF=X
+
+# Global guardrails. Per-bot overrides allowed inside strategies.yaml.
+guardrails:
+  position_cap_stock: 0.20            # 20%
+  position_cap_etf:   0.35            # 35%
+  position_cap_crypto: 0.10           # 10%
+  portfolio_floor_eur: 500
+  max_trades_per_day: 5
+  fee_profit_ratio_max: 0.25          # skip if round-trip fee > 25% of expected profit
+  initial_capital_eur: 1000.0
+
+# Logging
+logging:
+  level: INFO
+  rotate_daily: true
+  path: data/logs

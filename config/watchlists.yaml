@@ -1,0 +1,79 @@
+# UCITS-compliant universe, EUR-denominated where possible.
+# All Xetra tickers use the .DE suffix (yfinance convention). IBKR symbols
+# may differ — resolved dynamically via reqContractDetails at startup.
+#
+# Mapping rationale (US -> UCITS Xetra equivalent):
+#   SPY  -> SXR8.DE   iShares Core S&P 500 UCITS
+#   QQQ  -> SXRV.DE   iShares Nasdaq 100 UCITS
+#   IWM  -> ZPRR.DE   SPDR Russell 2000 US Small Cap UCITS
+#   EWJ  -> SXR1.DE   iShares Core MSCI Japan IMI UCITS  (actually MSCI Pacific ex-JP)
+#
+# IBKR paper doesn't expose CEUG.DE (iShares MSCI EMU) or IS3N.DE
+# (iShares Core MSCI EM IMI) on Xetra EUR — both listings return no
+# security definition and their only IBKR-tradable share classes are
+# GBP-hedged on the LSE, which would silently swap currency. Dropped.
+#
+# DIA and the US sector ETFs (XLK/XLV/XLF/XLE/XLY) have no clean UCITS
+# equivalents under the symbols yfinance knows. Expand the universe once
+# you search IBKR's contract database directly and add verified symbols.
+
+etfs_ucits:
+  - SXR8.DE
+  - SXRV.DE
+  - ZPRR.DE
+  - SXR1.DE
+
+# US equities — accessible to EU retail (stocks, not ETFs; PRIIPs doesn't apply).
+stocks_us:
+  - AAPL
+  - MSFT
+  - GOOGL
+  - AMZN
+  - META
+  - NVDA
+  - JPM
+  - V
+  - UNH
+  - HD
+
+# EU equities. yfinance tickers; IBKR contract resolution confirms exchange.
+stocks_eu:
+  - ASML.AS        # Amsterdam
+  - SAP.DE         # Xetra
+  - MC.PA          # LVMH, Paris
+  - NESN.SW        # Nestle, SIX Swiss
+  - SIE.DE         # Siemens, Xetra
+  - AIR.PA         # Airbus, Paris
+
+# Crypto ETPs — resolved via IBKR contract details in Phase 3.
+crypto_etps:
+  - BTCE.DE        # WisdomTree Physical Bitcoin
+  - ZETH.DE        # 21Shares Ethereum Staking ETP
+
+# Per-ticker venue tag (feeds fee model + classification for risk.py).
+venue:
+  SXR8.DE: { class: etf,    venue: xetra_eur }
+  SXRV.DE: { class: etf,    venue: xetra_eur }
+  ZPRR.DE: { class: etf,    venue: xetra_eur }
+  SXR1.DE: { class: etf,    venue: xetra_eur }
+
+  AAPL:    { class: stock,  venue: nasdaq_usd }
+  MSFT:    { class: stock,  venue: nasdaq_usd }
+  GOOGL:   { class: stock,  venue: nasdaq_usd }
+  AMZN:    { class: stock,  venue: nasdaq_usd }
+  META:    { class: stock,  venue: nasdaq_usd }
+  NVDA:    { class: stock,  venue: nasdaq_usd }
+  JPM:     { class: stock,  venue: nyse_usd }
+  V:       { class: stock,  venue: nyse_usd }
+  UNH:     { class: stock,  venue: nyse_usd }
+  HD:      { class: stock,  venue: nyse_usd }
+
+  ASML.AS: { class: stock,  venue: xetra_eur }
+  SAP.DE:  { class: stock,  venue: xetra_eur }
+  MC.PA:   { class: stock,  venue: xetra_eur }
+  NESN.SW: { class: stock,  venue: xetra_eur }
+  SIE.DE:  { class: stock,  venue: xetra_eur }
+  AIR.PA:  { class: stock,  venue: xetra_eur }
+
+  BTCE.DE: { class: crypto, venue: crypto_etp_eur }
+  ZETH.DE: { class: crypto, venue: crypto_etp_eur }
