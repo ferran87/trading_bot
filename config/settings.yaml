@@ -26,6 +26,7 @@ fees:
   lse_gbp:         { per_trade_eur: 3.00, pct: 0.0005, min_eur: 3.00 }   # LSE listings (GBP)
   nasdaq_usd:      { per_trade_eur: 1.00, pct: 0.0, min_eur: 1.00 }      # US (paper only until PRIIPs KID exists)
   nyse_usd:        { per_trade_eur: 1.00, pct: 0.0, min_eur: 1.00 }
+  swiss_chf:       { per_trade_eur: 3.00, pct: 0.0005, min_eur: 3.00 }   # SIX Swiss (NESN, NOVN)
   crypto_etp_eur:  { per_trade_eur: 2.50, pct: 0.0010, min_eur: 2.50 }   # BTCE / ZETH on Xetra
 
 # FX reference for dashboard reporting. yfinance pair codes.

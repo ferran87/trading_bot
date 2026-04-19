@@ -1,29 +1,40 @@
 # UCITS-compliant universe, EUR-denominated where possible.
 # All Xetra tickers use the .DE suffix (yfinance convention). IBKR symbols
-# may differ — resolved dynamically via reqContractDetails at startup.
+# may differ — verify each against IBKR contract search before first live run.
 #
-# Mapping rationale (US -> UCITS Xetra equivalent):
+# Mapping rationale (US original -> UCITS Xetra equivalent):
 #   SPY  -> SXR8.DE   iShares Core S&P 500 UCITS
 #   QQQ  -> SXRV.DE   iShares Nasdaq 100 UCITS
-#   IWM  -> ZPRR.DE   SPDR Russell 2000 US Small Cap UCITS
-#   EWJ  -> SXR1.DE   iShares Core MSCI Japan IMI UCITS  (actually MSCI Pacific ex-JP)
+#   IWM  -> ZPRR.DE   SPDR Russell 2000 UCITS
+#   EZU  -> EXSA.DE   iShares Euro Stoxx 600 UCITS  (broad European equities)
+#   EWJ  -> ISJP.DE   iShares MSCI Japan Small Cap UCITS  (Japan exposure)
+#   -    -> XDWD.DE   Xtrackers MSCI World UCITS  (broad world, replaces DIA)
+#   XLK  -> QDVE.DE   iShares S&P 500 IT Sector UCITS
+#   XLF  -> QDVH.DE   iShares S&P 500 Financials Sector UCITS  (confirmed via IBKR)
 #
-# IBKR paper doesn't expose CEUG.DE (iShares MSCI EMU) or IS3N.DE
-# (iShares Core MSCI EM IMI) on Xetra EUR — both listings return no
-# security definition and their only IBKR-tradable share classes are
-# GBP-hedged on the LSE, which would silently swap currency. Dropped.
-#
-# DIA and the US sector ETFs (XLK/XLV/XLF/XLE/XLY) have no clean UCITS
-# equivalents under the symbols yfinance knows. Expand the universe once
-# you search IBKR's contract database directly and add verified symbols.
+# NOTE: SXR1.DE removed — it was mislabelled as Japan but is MSCI Pacific ex-Japan.
+# IS3N.DE (EM) removed — IBKR paper returns no contract; no clean EM UCITS found on IBKR.
+# CEUG.DE/EEM equivalents excluded — IBKR paper: no EUR share class found.
+# DIA/XLE/XLY/XLV have no UCITS equivalents with verified IBKR contracts; omitted.
 
 etfs_ucits:
-  - SXR8.DE
-  - SXRV.DE
-  - ZPRR.DE
-  - SXR1.DE
+  - SXR8.DE    # iShares Core S&P 500 UCITS
+  - SXRV.DE   # iShares Nasdaq 100 UCITS
+  - ZPRR.DE   # SPDR Russell 2000 UCITS
+  - EXSA.DE   # iShares Euro Stoxx 600 UCITS  (broad European equities)
+  - XDWD.DE   # Xtrackers MSCI World UCITS
+  - QDVE.DE   # iShares S&P 500 IT Sector UCITS
+  - QDVH.DE   # iShares S&P 500 Financials Sector UCITS
 
 # US equities — accessible to EU retail (stocks, not ETFs; PRIIPs doesn't apply).
+# Sector breakdown:
+#   Tech/Growth : AAPL MSFT GOOGL AMZN META NVDA
+#   Financials  : JPM V BAC GS
+#   Healthcare  : UNH JNJ PFE
+#   Energy      : XOM CVX
+#   Industrials : CAT HON
+#   Cons Staples: PG KO WMT
+#   Cons Discr  : HD NKE DIS
 stocks_us:
   - AAPL
   - MSFT
@@ -33,17 +44,46 @@ stocks_us:
   - NVDA
   - JPM
   - V
+  - BAC
+  - GS
   - UNH
+  - JNJ
+  - PFE
+  - XOM
+  - CVX
+  - CAT
+  - HON
+  - PG
+  - KO
+  - WMT
   - HD
+  - NKE
+  - DIS
 
 # EU equities. yfinance tickers; IBKR contract resolution confirms exchange.
+# Sector breakdown:
+#   Tech        : ASML.AS SAP.DE
+#   Luxury/Cons : MC.PA AIR.PA BMW.DE
+#   Staples     : NESN.SW
+#   Industrials : SIE.DE
+#   Energy      : TTE.PA
+#   Healthcare  : NOVN.SW BAYN.DE
+#   Financials  : BNP.PA ALV.DE
+# NOTE: NESN.SW and NOVN.SW trade in CHF on SIX Swiss — prices treated as EUR
+#       (~5% FX error, acceptable at this portfolio size). Fix in Phase 1b.
 stocks_eu:
-  - ASML.AS        # Amsterdam
-  - SAP.DE         # Xetra
+  - ASML.AS        # ASML, Amsterdam
+  - SAP.DE         # SAP, Xetra
   - MC.PA          # LVMH, Paris
-  - NESN.SW        # Nestle, SIX Swiss
+  - NESN.SW        # Nestle, SIX Swiss (CHF)
   - SIE.DE         # Siemens, Xetra
   - AIR.PA         # Airbus, Paris
+  - TTE.PA         # TotalEnergies, Paris
+  - NOVN.SW        # Novartis, SIX Swiss (CHF)
+  - BNP.PA         # BNP Paribas, Paris
+  - BMW.DE         # BMW, Xetra
+  - ALV.DE         # Allianz, Xetra
+  - BAYN.DE        # Bayer, Xetra
 
 # Crypto ETPs — resolved via IBKR contract details in Phase 3.
 crypto_etps:
@@ -55,7 +95,10 @@ venue:
   SXR8.DE: { class: etf,    venue: xetra_eur }
   SXRV.DE: { class: etf,    venue: xetra_eur }
   ZPRR.DE: { class: etf,    venue: xetra_eur }
-  SXR1.DE: { class: etf,    venue: xetra_eur }
+  EXSA.DE: { class: etf,    venue: xetra_eur }
+  XDWD.DE: { class: etf,    venue: xetra_eur }
+  QDVE.DE: { class: etf,    venue: xetra_eur }
+  QDVH.DE: { class: etf,    venue: xetra_eur }
 
   AAPL:    { class: stock,  venue: nasdaq_usd }
   MSFT:    { class: stock,  venue: nasdaq_usd }
@@ -65,15 +108,34 @@ venue:
   NVDA:    { class: stock,  venue: nasdaq_usd }
   JPM:     { class: stock,  venue: nyse_usd }
   V:       { class: stock,  venue: nyse_usd }
+  BAC:     { class: stock,  venue: nyse_usd }
+  GS:      { class: stock,  venue: nyse_usd }
   UNH:     { class: stock,  venue: nyse_usd }
+  JNJ:     { class: stock,  venue: nyse_usd }
+  PFE:     { class: stock,  venue: nyse_usd }
+  XOM:     { class: stock,  venue: nyse_usd }
+  CVX:     { class: stock,  venue: nyse_usd }
+  CAT:     { class: stock,  venue: nyse_usd }
+  HON:     { class: stock,  venue: nasdaq_usd }
+  PG:      { class: stock,  venue: nyse_usd }
+  KO:      { class: stock,  venue: nyse_usd }
+  WMT:     { class: stock,  venue: nyse_usd }
   HD:      { class: stock,  venue: nyse_usd }
+  NKE:     { class: stock,  venue: nyse_usd }
+  DIS:     { class: stock,  venue: nyse_usd }
 
   ASML.AS: { class: stock,  venue: xetra_eur }
   SAP.DE:  { class: stock,  venue: xetra_eur }
   MC.PA:   { class: stock,  venue: xetra_eur }
-  NESN.SW: { class: stock,  venue: xetra_eur }
+  NESN.SW: { class: stock,  venue: swiss_chf }
   SIE.DE:  { class: stock,  venue: xetra_eur }
   AIR.PA:  { class: stock,  venue: xetra_eur }
+  TTE.PA:  { class: stock,  venue: xetra_eur }
+  NOVN.SW: { class: stock,  venue: swiss_chf }
+  BNP.PA:  { class: stock,  venue: xetra_eur }
+  BMW.DE:  { class: stock,  venue: xetra_eur }
+  ALV.DE:  { class: stock,  venue: xetra_eur }
+  BAYN.DE: { class: stock,  venue: xetra_eur }
 
   BTCE.DE: { class: crypto, venue: crypto_etp_eur }
   ZETH.DE: { class: crypto, venue: crypto_etp_eur }

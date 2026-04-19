@@ -1,0 +1,3 @@
+[server]
+port = 8510
+headless = true        # don't auto-open browser tab on every run

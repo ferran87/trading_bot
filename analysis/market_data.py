@@ -131,12 +131,44 @@ def prefetch_since(
     return out
 
 
-def last_prices_eur(bars_by_ticker: dict[str, Bars]) -> dict[str, float]:
-    """For Phase 1 we treat yfinance close as already in EUR for UCITS/.DE
-    tickers. US/.L/.SW/.PA listings will get proper FX conversion in Phase 1b.
+def _venue_currency(ticker: str) -> str:
+    """Derive the ticker's currency from the venue tag in watchlists.yaml.
+
+    Venue names encode the currency as the last token after '_'
+    (e.g. xetra_eur → EUR, nasdaq_usd → USD). Defaults to EUR for unknown.
     """
-    # TODO(phase1b): apply FX using core.fx using bars' currency metadata.
-    return {t: b.last_close() for t, b in bars_by_ticker.items()}
+    try:
+        from core.config import CONFIG
+        venue_map: dict = CONFIG.watchlists.get("venue", {})
+        entry = venue_map.get(ticker, {})
+        venue: str = entry.get("venue", "xetra_eur")
+        return venue.rsplit("_", 1)[-1].upper()
+    except Exception:
+        return "EUR"
+
+
+def last_prices_eur(bars_by_ticker: dict[str, Bars]) -> dict[str, float]:
+    """Return the latest close price for each ticker, converted to EUR.
+
+    Reads the venue map from watchlists.yaml to determine each ticker's
+    native currency, then applies an EOD yfinance FX rate for non-EUR tickers.
+    """
+    from core import fx
+
+    out: dict[str, float] = {}
+    for ticker, bars in bars_by_ticker.items():
+        close = bars.last_close()
+        ccy = _venue_currency(ticker)
+        if ccy != "EUR":
+            try:
+                close = fx.to_eur(close, ccy)
+            except Exception as e:
+                log.warning(
+                    "market_data: FX conversion failed for %s (%s→EUR): %s; "
+                    "using raw price", ticker, ccy, e,
+                )
+        out[ticker] = close
+    return out
 
 
 __all__ = [

@@ -9,7 +9,7 @@ bots:
   - id: 2
     name: Moderate
     strategy: mean_reversion
-    enabled: false        # wired in Phase 2
+    enabled: true
 
   - id: 3
     name: Aggressive
@@ -29,6 +29,7 @@ strategies:
 
   mean_reversion:
     universe: [stocks_us, stocks_eu]
+    min_history_days: 50
     rsi_period: 14
     rsi_entry_below: 30
     rsi_exit_above: 55

@@ -20,6 +20,7 @@ from core.db import Bot, ErrorLog, get_session
 from core.portfolio import Portfolio
 from strategies.base import Strategy, StrategyContext
 from strategies.etf_momentum import EtfMomentumStrategy
+from strategies.mean_reversion import MeanReversionStrategy
 
 log = logging.getLogger(__name__)
 
@@ -32,8 +33,8 @@ def validate_run_dates(today: date, as_of: date | None) -> None:
 
 STRATEGY_REGISTRY: dict[str, Callable[[], Strategy]] = {
     "etf_momentum": EtfMomentumStrategy,
-    # wired in later phases:
-    # "mean_reversion": MeanReversionStrategy,
+    "mean_reversion": MeanReversionStrategy,
+    # wired in Phase 3:
     # "news_sentiment": NewsSentimentStrategy,
 }
 

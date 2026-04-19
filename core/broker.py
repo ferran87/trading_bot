@@ -156,12 +156,23 @@ class IBKRBroker:
             self._ib.disconnect()
             raise RuntimeError("IBKRBroker: connected but no managed accounts returned.")
         self._account = accounts[0]
-        if not self._account.startswith(("DU", "DF")):
-            self._ib.disconnect()
-            raise RuntimeError(
-                f"IBKRBroker: refusing to trade on non-paper account "
-                f"{self._account!r}. Log into the PAPER account in Gateway."
+        # Known IBKR paper-account prefixes. DU = US/global paper, DF = advisor
+        # demo, DW = some EU-domiciled paper accounts.
+        _PAPER_PREFIXES = ("DU", "DF", "DW")
+        is_known_paper = self._account.startswith(_PAPER_PREFIXES)
+        require_paper = os.environ.get("IBKR_REQUIRE_PAPER", "1") == "1"
+        if not is_known_paper:
+            msg = (
+                f"IBKRBroker: account {self._account!r} does not match known paper "
+                f"prefixes {_PAPER_PREFIXES}. If this IS a paper account with a "
+                "non-standard prefix (common for EU IBKR accounts), set "
+                "IBKR_REQUIRE_PAPER=0 in .env to bypass this check. "
+                "NEVER set this on a live account."
             )
+            if require_paper:
+                self._ib.disconnect()
+                raise RuntimeError(msg)
+            log.warning(msg)
         log.info("IBKRBroker connected: account=%s clientId=%d",
                  self._account, self._client_id)
 

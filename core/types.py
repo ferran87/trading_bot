@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import Enum
 
 
@@ -69,6 +69,7 @@ class PositionView:
     qty: float
     avg_entry_eur: float
     last_price_eur: float
+    entry_date: date = field(default_factory=date.today)
 
     @property
     def market_value_eur(self) -> float:

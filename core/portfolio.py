@@ -62,6 +62,7 @@ class Portfolio:
                 qty=p.qty,
                 avg_entry_eur=p.avg_entry_eur,
                 last_price_eur=last,
+                entry_date=p.entry_date,
             )
         return PortfolioSnapshot(bot_id=bot_id, cash_eur=cash, positions=positions)
 

@@ -54,13 +54,27 @@ def _cap_for(asset_class: AssetClass) -> float:
 
 def _asset_class_from_watchlist(ticker: str) -> AssetClass:
     venue_map: dict = CONFIG.watchlists.get("venue", {})
-    entry = venue_map.get(ticker, {})
-    klass = entry.get("class", "stock")
+    entry = venue_map.get(ticker)
+    if entry is None:
+        raise ValueError(
+            f"risk: ticker {ticker!r} is not in the watchlists.yaml venue map. "
+            "Add it with a 'class' field (etf/stock/crypto) before trading."
+        )
+    klass = entry.get("class")
+    if klass is None:
+        raise ValueError(
+            f"risk: ticker {ticker!r} venue entry in watchlists.yaml is missing "
+            "the required 'class' field (expected: etf, stock, or crypto)."
+        )
     return AssetClass(klass)
 
 
 def resolve_asset_class(order: Order) -> AssetClass:
-    """Prefer what the strategy set; fall back to watchlists.yaml."""
+    """Prefer what the strategy set; fall back to watchlists.yaml.
+
+    Raises ValueError if ticker is absent from watchlists.yaml and the order
+    carries no asset_class — a misconfigured ticker must be caught loudly.
+    """
     if order.asset_class is not None:
         return order.asset_class
     return _asset_class_from_watchlist(order.ticker)
