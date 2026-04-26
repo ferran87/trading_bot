@@ -75,6 +75,31 @@ class BacktestResult:
 
 
 def _trading_days(start: date, end: date) -> list[date]:
+    """Return actual NYSE trading days between start and end (inclusive).
+
+    Uses a single yfinance download of AAPL to get the real market calendar
+    instead of a naive weekday filter, which incorrectly includes US market
+    holidays (New Year's Day, MLK Day, Good Friday, etc.).  AAPL is the most
+    liquid NYSE/NASDAQ ticker and always has a bar on every real trading day.
+
+    Falls back to weekday-only filtering if the download fails.
+    """
+    import yfinance as yf
+    try:
+        df = yf.download(
+            "AAPL",
+            start=start.isoformat(),
+            end=(end + timedelta(days=1)).isoformat(),
+            auto_adjust=True,
+            progress=False,
+            timeout=15,
+        )
+        if not df.empty:
+            return sorted(d.date() for d in df.index)
+    except Exception:
+        pass
+    # Fallback: weekday filter (same as before, but warns)
+    log.warning("_trading_days: yfinance fallback — holidays not excluded")
     days: list[date] = []
     d = start
     while d <= end:
