@@ -28,7 +28,6 @@ from core import fx
 from core.broker import MockBroker
 from core.config import CONFIG
 from core.db import Base, Bot, EquitySnapshot, Trade
-from core.runner import run_bot
 
 log = logging.getLogger(__name__)
 
@@ -135,6 +134,7 @@ def run_backtest(
         with SessionLocal() as s:
             bot_row = s.query(Bot).filter(Bot.id == bot_id).one()
             try:
+                from core.runner import run_bot  # lazy import to avoid top-level strategy imports on cloud
                 run_bot(s, broker, bot_row, day, force_rebalance=False, as_of=day)
                 s.commit()
             except Exception as exc:
