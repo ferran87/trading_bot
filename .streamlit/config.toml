@@ -1,3 +1,7 @@
 [server]
-port = 8510
 headless = true        # don't auto-open browser tab on every run
+# port is intentionally unset — Streamlit Cloud requires the default 8501.
+# Local runs use run_dashboard.bat which passes --server.port 8511 on the command line.
+
+[browser]
+gatherUsageStats = false
