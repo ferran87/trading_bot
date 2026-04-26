@@ -17,7 +17,7 @@ CONFIG_DIR = PROJECT_ROOT / "config"
 DATA_DIR = PROJECT_ROOT / "data"
 LOG_DIR = DATA_DIR / "logs"
 
-load_dotenv(PROJECT_ROOT / ".env")
+load_dotenv(PROJECT_ROOT / ".env", override=True)
 
 
 def _load_yaml(name: str) -> dict[str, Any]:
@@ -48,9 +48,7 @@ class Config:
 
     @property
     def strategies(self) -> dict[str, Any]:
-        if self._strategies is None:
-            self._strategies = _load_yaml("strategies.yaml")
-        return self._strategies
+        return _load_yaml("strategies.yaml")
 
     @property
     def broker_backend(self) -> str:
@@ -63,6 +61,20 @@ class Config:
 
     @property
     def db_url(self) -> str:
+        """Return the SQLAlchemy database URL.
+
+        Priority:
+          1. DATABASE_URL env var (set on Streamlit Cloud and in .env for the bot)
+          2. Local SQLite fallback (development / offline)
+
+        Supabase and some PaaS providers give a `postgres://` URL — SQLAlchemy
+        requires `postgresql://`, so we normalise it automatically.
+        """
+        url = os.getenv("DATABASE_URL")
+        if url:
+            if url.startswith("postgres://"):
+                url = url.replace("postgres://", "postgresql://", 1)
+            return url
         return f"sqlite:///{self.db_path.as_posix()}"
 
 

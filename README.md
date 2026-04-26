@@ -2,7 +2,7 @@
 
 Autonomous **paper-trading** stack: multiple strategy bots share one **IBKR paper** account while each keeps a **virtual €1,000 book** in **SQLite**. Config-driven (YAML + `.env`), with a **Streamlit** dashboard and **Windows Task Scheduler** hooks.
 
-**Status:** **Bot 1** (UCITS ETF momentum) is implemented end-to-end with **MockBroker** and **IBKRBroker**. Bots 2 and 3 are specified in [`PROJECT_PLAN.md`](PROJECT_PLAN.md) but not wired in `core/runner.py` yet.
+**Status:** Three bots run **`aggressive_momentum`**, **`mean_reversion`**, and **`sharp_dip`** (see [`config/strategies.yaml`](config/strategies.yaml)); all are registered in [`core/runner.py`](core/runner.py). **`etf_momentum`** is also registered for optional use. **`news_sentiment`** is planned (YAML stub only). Execution supports **MockBroker** and **IBKRBroker** (`ib_async`). Start with [`AGENTS.md`](AGENTS.md).
 
 Repository: [github.com/ferran87/trading_bot](https://github.com/ferran87/trading_bot)
 
@@ -45,6 +45,9 @@ pytest tests/ -q
 
 | Doc | Content |
 |-----|---------|
+| [`AGENTS.md`](AGENTS.md) | **Start here for Cursor** — stack, pipeline, pitfalls, links. |
+| [`CLAUDE.md`](CLAUDE.md) | **Claude Code** — compact mirror of `AGENTS.md`; read `AGENTS.md` for full detail. |
+| [`docs/CONTEXT_FOR_AI.md`](docs/CONTEXT_FOR_AI.md) | Minimal canonical facts for assistants (behavior + extension hooks). |
 | [`PROJECT_PLAN.md`](PROJECT_PLAN.md) | Original spec, guardrails, roadmap. |
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Data flow, modules, virtual book vs IBKR. |
 | [`docs/BRANCHING.md`](docs/BRANCHING.md) | `main`, `staging`, `live` branch policy. |

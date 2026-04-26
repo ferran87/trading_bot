@@ -7,7 +7,7 @@ No I/O, no DB access, no broker calls. The executor drives everything else.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
@@ -22,6 +22,8 @@ class StrategyContext:
     bars: dict[str, Bars]
     params: dict[str, Any]          # this strategy's block from strategies.yaml
     force_rebalance: bool = False   # skip Monday-only gate (weekend / manual run)
+    buys_per_ticker: dict[str, int] = field(default_factory=dict)  # open BUY count per ticker
+    prices_eur: dict[str, float] = field(default_factory=dict)     # last close converted to EUR
 
 
 class Strategy(ABC):

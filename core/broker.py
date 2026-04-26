@@ -12,7 +12,7 @@ import logging
 import os
 import random
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Protocol
 
 from core.config import CONFIG
@@ -65,9 +65,13 @@ class MockBroker:
 
     Slippage sign is randomized uniformly in [-slippage_bps, +slippage_bps]
     unless `seed` is None (then 0 slippage is used for reproducibility).
+
+    Set `sim_date` to a date before running a backtest day so fill timestamps
+    reflect the simulated date rather than the real current time.
     """
 
     seed: int | None = 42
+    sim_date: "date | None" = None  # set by backtest engine per simulated day
 
     def __post_init__(self) -> None:
         self._rng = random.Random(self.seed) if self.seed is not None else None
@@ -90,6 +94,14 @@ class MockBroker:
         fill_price_eur = order.ref_price_eur * (1 + direction * bps / 10_000.0)
         fee = estimate_fee_eur(order.ticker, order.qty, fill_price_eur)
 
+        if self.sim_date is not None:
+            ts = datetime(
+                self.sim_date.year, self.sim_date.month, self.sim_date.day,
+                16, 0, 0, tzinfo=timezone.utc,
+            )
+        else:
+            ts = datetime.now(tz=timezone.utc)
+
         return Fill(
             ticker=order.ticker,
             side=order.side,
@@ -98,7 +110,7 @@ class MockBroker:
             price_eur=fill_price_eur,
             fx_rate=1.0,
             fee_eur=fee,
-            timestamp=datetime.now(tz=timezone.utc),
+            timestamp=ts,
             broker_order_id=None,
         )
 
@@ -126,11 +138,12 @@ class IBKRBroker:
 
     _next_client_offset: int = 0
 
-    def __init__(self, client_id: int | None = None, timeout: float | None = None) -> None:
+    def __init__(self, port: int | None = None, client_id: int | None = None, timeout: float | None = None) -> None:
         self._ib = None
         if timeout is None:
             timeout = float(os.environ.get("IBKR_ORDER_TIMEOUT_SEC", "120"))
         self._timeout = timeout
+        self._port = port  # overrides IBKR_PORT env var when set
         self._client_id = client_id
         self._contracts_cache: dict | None = None
         self._account: str | None = None
@@ -141,7 +154,7 @@ class IBKRBroker:
         from ib_async import IB
 
         host = os.environ.get("IBKR_HOST", "127.0.0.1")
-        port = int(os.environ.get("IBKR_PORT", "4002"))
+        port = self._port if self._port is not None else int(os.environ.get("IBKR_PORT", "4002"))
         base = int(os.environ.get("IBKR_CLIENT_ID_BASE", "100"))
 
         if self._client_id is None:

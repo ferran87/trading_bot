@@ -17,6 +17,17 @@
 # CEUG.DE/EEM equivalents excluded — IBKR paper: no EUR share class found.
 # DIA/XLE/XLY/XLV have no UCITS equivalents with verified IBKR contracts; omitted.
 
+# High-beta US growth stocks for aggressive momentum rotation (Bot 1).
+# NVDA, META, AMZN, GOOGL already have venue entries below.
+stocks_aggressive:
+  - NVDA
+  - META
+  - AMZN
+  - TSLA
+  - AMD
+  - PLTR
+  - GOOGL
+
 etfs_ucits:
   - SXR8.DE    # iShares Core S&P 500 UCITS
   - SXRV.DE   # iShares Nasdaq 100 UCITS
@@ -139,3 +150,7 @@ venue:
 
   BTCE.DE: { class: crypto, venue: crypto_etp_eur }
   ZETH.DE: { class: crypto, venue: crypto_etp_eur }
+
+  TSLA:    { class: stock,  venue: nasdaq_usd }
+  AMD:     { class: stock,  venue: nasdaq_usd }
+  PLTR:    { class: stock,  venue: nasdaq_usd }

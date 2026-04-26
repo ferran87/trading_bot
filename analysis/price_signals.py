@@ -62,6 +62,30 @@ def volume_zscore(volume: pd.Series, window: int = 20) -> float:
     return (float(volume.iloc[-1]) - mean) / std
 
 
+def consecutive_down_days(close: pd.Series) -> int:
+    """Count consecutive sessions where close fell vs the prior close (ending at iloc[-1])."""
+    if len(close) < 2:
+        return 0
+    count = 0
+    for i in range(len(close) - 1, 0, -1):
+        if float(close.iloc[i]) < float(close.iloc[i - 1]):
+            count += 1
+        else:
+            break
+    return count
+
+
+def above_sma(close: pd.Series, period: int) -> bool:
+    """True if the latest close is above the `period`-day simple moving average.
+
+    Returns False (conservative) when there isn't enough history.
+    """
+    if len(close) < period:
+        return False
+    sma = float(close.iloc[-period:].mean())
+    return float(close.iloc[-1]) > sma
+
+
 def overnight_gap(open_: pd.Series, close: pd.Series) -> float:
     """(today's open - yesterday's close) / yesterday's close."""
     if len(open_) < 1 or len(close) < 2:

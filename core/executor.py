@@ -78,6 +78,9 @@ def run_orders(
 
         fill = broker.place_market_order(order)
         Portfolio.apply_fill(session, bot_id, fill, order.signal_reason)
+        # Commit immediately so a crash after broker fill cannot lose this trade.
+        # Later commits in runner (equity snapshot, RunLog) are independent of fills.
+        session.commit()
         report.approved.append((order, fill))
         log.info(
             "FILLED   bot=%d %s %s qty=%.4f @ %.4f EUR fee=%.2f -- %s",

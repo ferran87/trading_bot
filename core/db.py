@@ -41,7 +41,9 @@ class Bot(Base):
     name = Column(String, nullable=False, unique=True)
     strategy = Column(String, nullable=False)
     initial_capital_eur = Column(Float, nullable=False)
-    enabled = Column(Integer, nullable=False, default=1)     # 0/1 bool for SQLite
+    enabled = Column(Integer, nullable=False, default=1)       # 0/1 bool for SQLite
+    owner = Column(String, nullable=False, default="")         # display name for dashboard selector
+    trading_mode = Column(String, nullable=False, default="paper")  # "paper" | "live"
     created_at = Column(DateTime, nullable=False, default=utcnow)
 
     trades = relationship("Trade", back_populates="bot", cascade="all, delete-orphan")
@@ -111,6 +113,34 @@ class ErrorLog(Base):
     traceback = Column(Text, nullable=True)
 
 
+class RunLog(Base):
+    """One row per bot per automatic run — records every decision, including no-action."""
+
+    __tablename__ = "run_logs"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, nullable=False, default=utcnow, index=True)
+    bot_id = Column(Integer, ForeignKey("bots.id"), nullable=False, index=True)
+    run_date = Column(Date, nullable=False, index=True)
+    n_buys = Column(Integer, nullable=False, default=0)
+    n_sells = Column(Integer, nullable=False, default=0)
+    n_rejected = Column(Integer, nullable=False, default=0)
+    summary = Column(Text, nullable=False, default="")
+    explanation = Column(Text, nullable=True, default=None)  # AI-generated plain-language summary
+
+
+class CapitalAdjustment(Base):
+    """Manual capital top-ups or withdrawals for a bot's virtual book."""
+
+    __tablename__ = "capital_adjustments"
+
+    id = Column(Integer, primary_key=True)
+    bot_id = Column(Integer, ForeignKey("bots.id"), nullable=False, index=True)
+    ts = Column(DateTime, nullable=False, default=utcnow)
+    amount_eur = Column(Float, nullable=False)   # positive = deposit, negative = withdrawal
+    note = Column(Text, nullable=False, default="")
+
+
 # --- Engine / session ---
 
 _engine = None
@@ -121,7 +151,24 @@ def engine():
     global _engine
     if _engine is None:
         _engine = create_engine(CONFIG.db_url, future=True)
+        Base.metadata.create_all(_engine)  # idempotent — creates missing tables on first use
+        _migrate(_engine)
     return _engine
+
+
+def _migrate(eng) -> None:
+    """Apply lightweight additive migrations (new nullable columns only)."""
+    from sqlalchemy import text
+    migrations = [
+        "ALTER TABLE run_logs ADD COLUMN explanation TEXT",
+    ]
+    with eng.connect() as conn:
+        for sql in migrations:
+            try:
+                conn.execute(text(sql))
+                conn.commit()
+            except Exception:
+                pass  # column already exists — safe to ignore
 
 
 def session_factory() -> sessionmaker[Session]:
@@ -140,7 +187,8 @@ def get_session() -> Session:
 
 def init_db() -> None:
     """Create tables and seed the 3 bots from strategies.yaml."""
-    Path(CONFIG.db_path).parent.mkdir(parents=True, exist_ok=True)
+    if "sqlite" in CONFIG.db_url:
+        Path(CONFIG.db_path).parent.mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(engine())
 
     initial_capital = float(CONFIG.settings["guardrails"]["initial_capital_eur"])
@@ -155,12 +203,16 @@ def init_db() -> None:
                         strategy=b["strategy"],
                         initial_capital_eur=initial_capital,
                         enabled=1 if b.get("enabled", True) else 0,
+                        owner=b.get("owner", ""),
+                        trading_mode=b.get("trading_mode", "paper"),
                     )
                 )
             else:
                 existing.name = b["name"]
                 existing.strategy = b["strategy"]
                 existing.enabled = 1 if b.get("enabled", True) else 0
+                existing.owner = b.get("owner", existing.owner)
+                existing.trading_mode = b.get("trading_mode", existing.trading_mode)
         s.commit()
     print(f"DB ready at {CONFIG.db_path}")
 

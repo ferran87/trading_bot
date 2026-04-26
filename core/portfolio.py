@@ -18,7 +18,9 @@ from typing import Iterable
 
 from sqlalchemy.orm import Session
 
-from core.db import Bot, EquitySnapshot, Position, Trade
+from sqlalchemy import func
+
+from core.db import Bot, CapitalAdjustment, EquitySnapshot, Position, Trade
 from core.types import Fill, PortfolioSnapshot, PositionView, Side
 
 
@@ -32,9 +34,15 @@ class Portfolio:
 
     @staticmethod
     def cash_eur(session: Session, bot_id: int) -> float:
-        """Cash = initial_capital + sum(sells - buys - fees)."""
+        """Cash = initial_capital + capital_adjustments + sum(sells - buys - fees)."""
         bot = session.query(Bot).filter(Bot.id == bot_id).one()
         cash = float(bot.initial_capital_eur)
+        adjustments = (
+            session.query(func.coalesce(func.sum(CapitalAdjustment.amount_eur), 0.0))
+            .filter(CapitalAdjustment.bot_id == bot_id)
+            .scalar()
+        )
+        cash += float(adjustments)
         for t in session.query(Trade).filter(Trade.bot_id == bot_id).all():
             notional = t.qty * t.price_eur
             if t.side == Side.BUY.value:

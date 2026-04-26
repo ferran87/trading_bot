@@ -44,7 +44,15 @@ guardrails:
   portfolio_floor_eur: 500
   max_trades_per_day: 5
   fee_profit_ratio_max: 0.25          # skip if round-trip fee > 25% of expected profit
-  initial_capital_eur: 1000.0
+  # Virtual budget per bot: $1M paper account / 2 bots = $500K each ≈ €460K at 0.92 USD/EUR
+  # Update this when account size or number of bots changes.
+  initial_capital_eur: 460000.0
+
+# Reconciliation — positions held in IBKR outside the bot's control.
+# These are excluded from the SQLite ↔ IBKR reconciliation check so they
+# don't generate false-positive discrepancy alerts.
+reconciliation:
+  external_positions: [SXR1.DE]   # manually held positions, not bot-managed
 
 # Logging
 logging:

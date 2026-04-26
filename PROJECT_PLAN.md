@@ -1,5 +1,9 @@
 # Trading Bot — Project Plan
 
+## Status snapshot (read this first)
+
+The **critical file tree** in this document comes from the **original brief** and is **aspirational / partially outdated**. The live repo uses **`ib_async`** (not `ib_insync`) for IBKR, includes `scripts/`, `tests/`, `docs/`, and additional strategies (for example **`aggressive_momentum`**, **`sharp_dip`**) beyond the three filenames in the tree. For **current** stack, bots, and pitfalls, use **[AGENTS.md](AGENTS.md)** and **[docs/CONTEXT_FOR_AI.md](docs/CONTEXT_FOR_AI.md)**.
+
 ## Context
 Build an autonomous paper-trading bot that connects to Interactive Brokers (IBKR) via API and runs **three strategy "flavours" as independent bots in parallel**, each with its own virtual €1,000 book. After an open-ended paper-trading period, the user reviews the Streamlit dashboard and manually promotes the bot they like best to a real €1,000 live account. Code is written by Cursor; the user interacts with the system primarily via config files and the dashboard. Source of original brief: `C:\Users\ferra\trading bot\initial chat.pdf`.
 
@@ -15,7 +19,7 @@ Build an autonomous paper-trading bot that connects to Interactive Brokers (IBKR
 ### Broker & accounts
 - **Broker:** IBKR, cash account (no leverage, no shorts), European domicile (IBKR Ireland / UK).
 - **Connectivity:** `ib_async` (IBKR socket API; same lineage as `ib_insync`).
-- **Paper account:** single IBKR paper account shared by all 3 bots. Each bot uses a distinct `clientId` on the IB Gateway so orders are tagged.
+- **Paper account:** single IBKR paper account shared by all 3 bots. Virtual P&amp;L is **per bot** in SQLite; broker code uses one `ib_async` connection per `run_once` (see `core/broker.py` / `IBKR_CLIENT_ID_BASE` for `clientId` assignment).
 - **Market data:** IBKR feed; `yfinance` as fallback/backfill for features and for EU tickers where needed.
 - **FX:** base currency EUR. IBKR handles multi-currency; dashboard reports everything in EUR using end-of-day FX rates.
 
@@ -78,13 +82,13 @@ Build an autonomous paper-trading bot that connects to Interactive Brokers (IBKR
 - Trade-history / audit log (timestamp, bot, ticker, side, size, fee, signal that fired).
 - Guardrail status panel (trades-today counter per bot, floor-breach flags).
 
-## Critical files to create
+## Critical files (original brief — historical tree)
 
 ```
 C:\Users\ferra\trading bot\
 ├── .env                        # Anthropic API key, IBKR paper creds (NEVER commit)
 ├── .gitignore                  # venv, __pycache__, data/*.db, data/logs/, .env
-├── requirements.txt            # ib_insync, pandas, numpy, sqlalchemy, streamlit,
+├── requirements.txt            # ib_async, pandas, numpy, sqlalchemy, streamlit,
 │                               #   anthropic, yfinance, feedparser, python-dotenv, pydantic, pytest
 ├── README.md                   # setup + how to run
 ├── main.py                     # entry point; invoked by Task Scheduler
@@ -94,25 +98,27 @@ C:\Users\ferra\trading bot\
 │   └── strategies.yaml         # per-strategy parameters (RSI levels, momentum lookback,
 │                               #   sentiment threshold, sizing formula, etc.)
 ├── core/
-│   ├── broker.py               # ib_insync connection, order placement, fills, reconciliation
+│   ├── broker.py               # ib_async: MockBroker + IBKRBroker, fills, fees
 │   ├── portfolio.py            # virtual-book accounting per bot (cash, positions, equity curve)
 │   ├── executor.py             # routes proposed orders → risk.py → broker.py, records trades + fees
 │   └── risk.py                 # ALL guardrails (caps, floor, trade limit, fee-aware skip)
 ├── strategies/
 │   ├── base.py                 # abstract Strategy: propose_orders(portfolio, data) -> [Order]
-│   ├── etf_momentum.py         # Bot 1
-│   ├── mean_reversion.py       # Bot 2
-│   └── news_sentiment.py       # Bot 3
+│   ├── etf_momentum.py         # example: UCITS momentum (see live repo for all strategy modules)
+│   ├── mean_reversion.py       # Bot 2 (brief); plus other .py files in actual repo
+│   └── news_sentiment.py       # Bot 3 (brief); YAML may exist before code is registered
 ├── analysis/
 │   ├── price_signals.py        # volume-spike + gap detectors, RSI, momentum ranks
-│   ├── news_fetcher.py         # Yahoo Finance RSS per ticker, dedup
-│   └── sentiment.py            # Claude Haiku 4.5 scoring with structured prompt
+│   ├── news_fetcher.py         # Yahoo Finance RSS per ticker, dedup (if/when implemented)
+│   └── sentiment.py            # Claude Haiku 4.5 scoring with structured prompt (if/when implemented)
 ├── data/
 │   ├── trades.db               # SQLite: bots, trades, positions, equity_snapshots, errors
 │   └── logs/                   # per-day log files
 └── dashboard/
     └── app.py                  # Streamlit app (run with: streamlit run dashboard/app.py)
 ```
+
+**Live repository** also contains `scripts/`, `tests/`, `docs/`, `.cursor/` rules, `AGENTS.md`, and other modules not listed above.
 
 ### SQLite schema (minimum)
 - `bots(id, name, strategy, initial_capital_eur, created_at)`

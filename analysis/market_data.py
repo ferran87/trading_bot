@@ -116,8 +116,15 @@ def prefetch_since(
     calendar date — e.g. Friday close when ``as_of`` is Friday and you
     run on Saturday).
     """
-    months = max(2, (min_days // 21) + 2)
-    period = f"{months}mo"
+    # yfinance's `period` is relative to today. When as_of is in the past we
+    # must also cover the gap (today - as_of) so truncation leaves enough bars.
+    # Use a fixed generous period so the per-ticker cache hits across all
+    # simulated days in a backtest.
+    if as_of is None:
+        months = max(2, (min_days // 21) + 2)
+        period = f"{months}mo"
+    else:
+        period = "2y"
     out: dict[str, Bars] = {}
     for t in tickers:
         try:

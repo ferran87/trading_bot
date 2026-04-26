@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 
-from analysis.price_signals import rsi
+from analysis.price_signals import above_sma, rsi
 from core.types import AssetClass, Order, PortfolioSnapshot, Side
 from strategies.base import Strategy, StrategyContext
 
@@ -39,15 +39,18 @@ class MeanReversionStrategy(Strategy):
         ctx: StrategyContext,
     ) -> list[Order]:
         params = ctx.params
-        rsi_period     = int(params.get("rsi_period", 14))
-        entry_below    = float(params["rsi_entry_below"])
-        exit_above     = float(params["rsi_exit_above"])
-        profit_target  = float(params["profit_target_pct"])
-        stop_loss      = float(params["stop_loss_pct"])
-        max_days       = int(params["max_days_held"])
-        max_concurrent = int(params["max_concurrent"])
-        per_pos_pct    = float(params["per_position_pct"])
-        min_history    = int(params.get("min_history_days", rsi_period * 3))
+        rsi_period          = int(params.get("rsi_period", 14))
+        entry_below         = float(params["rsi_entry_below"])
+        exit_above          = float(params["rsi_exit_above"])
+        profit_target       = float(params["profit_target_pct"])
+        stop_loss           = float(params["stop_loss_pct"])
+        max_days            = int(params["max_days_held"])
+        max_concurrent      = int(params["max_concurrent"])
+        per_pos_pct         = float(params["per_position_pct"])
+        min_history         = int(params.get("min_history_days", rsi_period * 3))
+        trend_sma           = int(params.get("trend_sma_days", 0))  # 0 = disabled
+        mkt_ticker          = params.get("market_filter_ticker")
+        mkt_sma             = int(params.get("market_filter_sma", 200))
 
         orders: list[Order] = []
         equity = snapshot.total_eur
@@ -55,7 +58,7 @@ class MeanReversionStrategy(Strategy):
         # --- 1. EXIT checks on all currently held positions ---
         for ticker, pos in snapshot.positions.items():
             bars = ctx.bars.get(ticker)
-            price = bars.last_close() if bars is not None else None
+            price = ctx.prices_eur.get(ticker) or (bars.last_close() if bars is not None else None)
 
             days_held = (ctx.today - pos.entry_date).days
 
@@ -114,6 +117,16 @@ class MeanReversionStrategy(Strategy):
         if slots_available <= 0:
             return orders
 
+        # Market-level filter: skip all new entries if the index is in a bear market.
+        if mkt_ticker and mkt_ticker in ctx.bars:
+            mkt_bars = ctx.bars[mkt_ticker]
+            if not above_sma(mkt_bars.df["close"], mkt_sma):
+                log.info(
+                    "mean_reversion bot=%d: %s below %d-day MA — skipping all entries",
+                    ctx.bot_id, mkt_ticker, mkt_sma,
+                )
+                return orders
+
         for ticker, bars in ctx.bars.items():
             if slots_available <= 0:
                 break
@@ -125,7 +138,7 @@ class MeanReversionStrategy(Strategy):
             if len(bars.df) < min_history:
                 continue
 
-            price = bars.last_close()
+            price = ctx.prices_eur.get(ticker) or bars.last_close()
             if price <= 0:
                 continue
 
@@ -139,7 +152,7 @@ class MeanReversionStrategy(Strategy):
                 continue
 
             target_value = equity * per_pos_pct
-            qty = int(target_value // price)
+            qty = round(target_value / price, 4)  # fractional shares supported by IBKR
             if qty <= 0:
                 continue
 

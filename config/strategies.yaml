@@ -2,22 +2,144 @@
 
 bots:
   - id: 1
-    name: Conservative
-    strategy: etf_momentum
-    enabled: true
+    name: Aggressive Momentum
+    strategy: aggressive_momentum
+    enabled: false
 
   - id: 2
     name: Moderate
     strategy: mean_reversion
-    enabled: true
+    enabled: false
 
   - id: 3
-    name: Aggressive
-    strategy: news_sentiment
-    enabled: false        # wired in Phase 3
+    name: Sharp Dip
+    strategy: sharp_dip
+    enabled: false
+
+  - id: 4
+    name: RSI Recovery
+    strategy: rsi_recovery
+    enabled: false
+
+  - id: 5
+    name: RSI Rotation
+    strategy: rsi_rotation
+    enabled: false
+
+  - id: 6
+    name: RSI Accumulator
+    strategy: rsi_accumulator
+    enabled: false
+
+  # --- Paper bots (always enabled, always running) ---
+  - id: 7
+    name: RSI Compounder (Ferran) — Paper
+    strategy: rsi_compounder
+    trading_mode: paper
+    enabled: true
+    owner: Ferran
+    ibkr_port_paper: 4002  # IBKR default paper Gateway port — currently running
+
+  - id: 8
+    name: RSI Compounder (Adria) — Paper
+    strategy: rsi_compounder
+    trading_mode: paper
+    enabled: false          # enable when Adria's paper Gateway is ready
+    owner: Adria
+    ibkr_port_paper: 4012  # Adria paper Gateway port (to be configured)
+
+  - id: 9
+    name: RSI Compounder (Antonio) — Paper
+    strategy: rsi_compounder
+    trading_mode: paper
+    enabled: false          # enable when Antonio's paper Gateway is ready
+    owner: Antonio
+    ibkr_port_paper: 4014  # Antonio paper Gateway port (to be configured)
+
+  # --- Trend Momentum paper bots ---
+  - id: 10
+    name: Trend Momentum (Ferran) — Paper
+    strategy: trend_momentum
+    trading_mode: paper
+    enabled: true
+    owner: Ferran
+    ibkr_port_paper: 4002
+
+  - id: 11
+    name: Trend Momentum (Adria) — Paper
+    strategy: trend_momentum
+    trading_mode: paper
+    enabled: false
+    owner: Adria
+    ibkr_port_paper: 4012
+
+  - id: 12
+    name: Trend Momentum (Antonio) — Paper
+    strategy: trend_momentum
+    trading_mode: paper
+    enabled: false
+    owner: Antonio
+    ibkr_port_paper: 4014
+
+  # --- Live bots (disabled by default; toggle from dashboard to enable) ---
+  - id: 17
+    name: RSI Compounder (Ferran) — Live
+    strategy: rsi_compounder
+    trading_mode: live
+    enabled: false
+    owner: Ferran
+    ibkr_port: 4001         # IBKR default live Gateway port (to be configured)
+
+  - id: 20
+    name: Trend Momentum (Ferran) — Live
+    strategy: trend_momentum
+    trading_mode: live
+    enabled: false
+    owner: Ferran
+    ibkr_port: 4001
+
+  - id: 21
+    name: Trend Momentum (Adria) — Live
+    strategy: trend_momentum
+    trading_mode: live
+    enabled: false
+    owner: Adria
+    ibkr_port: 4003
+
+  - id: 22
+    name: Trend Momentum (Antonio) — Live
+    strategy: trend_momentum
+    trading_mode: live
+    enabled: false
+    owner: Antonio
+    ibkr_port: 4005
+
+  - id: 18
+    name: RSI Compounder (Adria) — Live
+    strategy: rsi_compounder
+    trading_mode: live
+    enabled: false
+    owner: Adria
+    ibkr_port: 4003         # Adria live Gateway port (to be configured)
+
+  - id: 19
+    name: RSI Compounder (Antonio) — Live
+    strategy: rsi_compounder
+    trading_mode: live
+    enabled: false
+    owner: Antonio
+    ibkr_port: 4005         # Antonio live Gateway port (to be configured)
 
 
 strategies:
+
+  aggressive_momentum:
+    universe: [stocks_aggressive, crypto_etps]
+    lookback_days: 21        # ~1 trading month — more reactive than 63
+    top_n: 4
+    rebalance_weekday: 0     # Monday
+    trend_filter: true
+    min_history_days: 30
 
   etf_momentum:
     universe: etfs_ucits
@@ -29,15 +151,134 @@ strategies:
 
   mean_reversion:
     universe: [stocks_us, stocks_eu]
-    min_history_days: 50
+    min_history_days: 60         # needs enough history for the 50-day SMA
     rsi_period: 14
-    rsi_entry_below: 30
+    rsi_entry_below: 35          # was 30 — catches more dips
     rsi_exit_above: 55
-    profit_target_pct: 0.05
-    stop_loss_pct: 0.07
-    max_days_held: 10
+    profit_target_pct: 0.04      # was 0.05 — exit winners faster
+    stop_loss_pct: 0.05          # was 0.07 — tighter loss cap
+    max_days_held: 7             # was 10 — free capital sooner
     max_concurrent: 5
     per_position_pct: 0.20
+    trend_sma_days: 0            # disabled — per-stock SMA blocks all entries in broad selloffs
+    market_filter_ticker: SXR8.DE  # only enter if this index is above its 200-day MA
+    market_filter_sma: 200
+
+  sharp_dip:
+    universe: [stocks_us, stocks_eu]
+    min_history_days: 40
+    consec_down_days: 3          # min consecutive down sessions to qualify
+    drop_5d_pct: 0.05            # 5-day cumulative drop must exceed 5%
+    rsi_entry_below: 35          # only enter if RSI(14) < 35 — diagnostic: 10x baseline expectancy
+    stop_loss_pct: 0.05          # hard stop from blended avg entry
+    trail_pct: 0.07              # short-mode trailing stop (not yet graduated)
+    long_trail_pct: 0.12         # graduated-mode trailing stop — wider to let winners run
+    max_days_held: 14            # safety net for non-graduated positions only
+    graduate_min_days: 7         # days held before graduation is possible
+    max_concurrent: 20           # max open positions (each takes 5% of equity)
+    per_position_pct: 0.05       # 20 x 5% = 100%; pyramid name caps at 15% (3 lots)
+    max_adds_per_ticker: 2       # max pyramid adds (so 3 total lots per name)
+
+  rsi_recovery:
+    universe: [stocks_us, stocks_eu, etfs_ucits]
+    min_history_days: 60
+    rsi_period: 14
+    rsi_was_below: 25          # true capitulation threshold — April crash hit RSI 15-20
+    rsi_now_above: 40          # lowered from 45 — captures MSFT-style recoveries (40.9 on Apr 8)
+    rsi_entry_max: 65          # block entry into stocks already well into recovery
+    rsi_lookback_days: 15         # widened from 7 — captures MSFT Mar 27 low (RSI 22.3) in Apr lookback
+    market_filter_ticker: SXR8.DE # require market itself to have been oversold (co-crash confirmation)
+    market_rsi_was_below: 30      # SXR8.DE RSI hit 29.8 on Mar 27; Feb never went below 40
+    market_rsi_lookback_days: 15  # wider window so Mar 27 low is visible through late April
+    trail_pct: 0.15            # short-mode trailing stop (first 7 days)
+    long_trail_pct: 0.30       # graduated-mode — wide enough for multi-month recovery runs
+    graduate_min_days: 7       # days held before graduation is possible
+    stop_loss_pct: 0.08        # hard stop at -8% from avg entry
+    max_concurrent: 10         # up to 10 positions
+    per_position_pct: 0.20     # max 20% per position; actual size = equity / slots_available
+    max_adds_per_ticker: 1     # one pyramid add allowed if profitable
+
+  rsi_rotation:
+    universe: [stocks_us, stocks_eu, etfs_ucits]
+    min_history_days: 60
+    rsi_period: 14
+    rsi_was_below: 25
+    rsi_now_above: 40
+    rsi_entry_max: 65          # block entry into stocks already well into recovery
+    rsi_lookback_days: 15
+    market_filter_ticker: SXR8.DE
+    market_rsi_was_below: 30
+    market_rsi_lookback_days: 15
+    trail_pct: 0.15
+    long_trail_pct: 0.30
+    graduate_min_days: 7
+    stop_loss_pct: 0.08
+    max_concurrent: 10
+    per_position_pct: 0.20
+    max_adds_per_ticker: 1
+    rotation_loss_threshold: -0.03  # rotate out a holding only if it's losing >3%
+
+  rsi_accumulator:
+    universe: [stocks_us, stocks_eu, etfs_ucits]
+    min_history_days: 60
+    rsi_period: 14
+    rsi_was_below: 25
+    rsi_now_above: 40
+    rsi_entry_max: 65            # block re-entry into already-overbought stocks
+    rsi_lookback_days: 15
+    market_filter_ticker: SXR8.DE
+    market_rsi_was_below: 30
+    market_rsi_lookback_days: 15
+    per_position_pct: 0.067      # ~6.7% per lot × 3 lots ≈ 20% max per stock
+    max_concurrent: 10
+    add_at_loss_1: -0.08         # add when down 8% from avg entry
+    add_at_loss_2: -0.15         # add again when down 15% from avg entry
+    max_adds_per_ticker: 2       # 2 adds = 3 total lots
+    trail_pct: 0.35              # 35% trailing stop (only fires when in profit)
+    rsi_take_profit: 70          # exit when RSI > 70 — fully recovered
+    max_days_held: 90            # time-based exit if never profitable
+    catastrophic_stop: -0.40     # absolute floor regardless of adds
+
+  rsi_compounder:
+    universe: [stocks_us, stocks_eu, etfs_ucits]
+    min_history_days: 60
+    rsi_period: 14
+    rsi_was_below: 25
+    rsi_now_above: 40
+    rsi_entry_max: 65
+    rsi_lookback_days: 15
+    market_filter_ticker: SXR8.DE
+    market_rsi_was_below: 30
+    market_rsi_lookback_days: 15
+    per_position_pct: 0.067      # ~6.7% per lot × 3 lots ≈ 20% max per stock
+    max_concurrent: 10
+    add_at_loss_1: -0.08
+    add_at_loss_2: -0.15
+    max_adds_per_ticker: 2
+    trail_pct: 0.35              # RSI < 70: wide trail, normal recovery
+    trail_pct_mid: 0.20          # RSI 70–80: tighten, rally extended
+    trail_pct_tight: 0.12        # RSI > 80: tight, euphoric — lock in gains
+    rsi_trail_mid: 70.0
+    rsi_trail_tight: 80.0
+    max_days_held: 90            # time-based exit if never profitable
+    catastrophic_stop: -0.40
+
+  trend_momentum:
+    universe: [stocks_us, stocks_eu]
+    min_history_days: 220             # need 200d SMA for market filter + buffer
+    market_filter_ticker: SXR8.DE     # reference index — must be above SMA200 to enter
+    market_sma_period: 200            # SMA period for the market filter
+    sma_period: 50                    # per-stock SMA period for trend filter
+    rsi_period: 14
+    rsi_entry_min: 40                 # RSI must have pulled back to at least 40
+    rsi_entry_max: 62                 # RSI must not be too extended (not already > 62)
+    rsi_momentum_days: 3              # RSI must be higher than 3 days ago (resuming)
+    trail_pct: 0.22                   # 22% trailing stop from peak (wider, handles oscillations)
+    catastrophic_stop: -0.15          # hard stop at -15% from avg entry
+    trend_break_days: 3               # consecutive closes below SMA50 = trend broken
+    max_days_held: 60                 # exit if never profitable after 60 days
+    max_concurrent: 10
+    per_position_pct: 0.10            # 10% per position × 10 slots = 100% max invested
 
   news_sentiment:
     universe: [stocks_us, stocks_eu]

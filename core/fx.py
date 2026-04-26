@@ -56,25 +56,47 @@ def eur_per_unit(currency: str, *, as_of: date | None = None) -> float:
 
 
 def _fetch_rate(currency: str, as_of: date | None) -> float:
-    """yfinance quote for the EUR/<ccy> pair, inverted."""
+    """yfinance quote for the EUR/<ccy> pair, inverted.
+
+    When as_of is given (backtest mode) we download a 2-year window once and
+    populate the cache for every date in that window, so a year-long backtest
+    costs one HTTP call, not one per day.
+    """
+    import pandas as pd
     import yfinance as yf
 
     pair = _PAIR_TEMPLATE.format(ccy=currency)
-    df = yf.download(pair, period="1mo", progress=False, auto_adjust=True,
-                     threads=False)
+    if as_of is not None:
+        # Bulk download covering up to 2 years back so any backtest window is served.
+        start = (pd.Timestamp(as_of) - pd.Timedelta(days=800)).date()
+        end = (pd.Timestamp(as_of) + pd.Timedelta(days=2)).date()
+        df = yf.download(pair, start=start, end=end, progress=False,
+                         auto_adjust=True, threads=False)
+    else:
+        df = yf.download(pair, period="1mo", progress=False, auto_adjust=True,
+                         threads=False)
     if df is None or df.empty:
         raise RuntimeError(f"No FX data for {pair}")
-    if as_of is not None:
-        import pandas as pd
-        cutoff = pd.Timestamp(as_of).tz_localize(None)
-        df = df[df.index <= cutoff]
-        if df.empty:
-            raise RuntimeError(f"No FX data for {pair} on or before {as_of}")
 
     close_col = df["Close"] if "Close" in df.columns else df.iloc[:, 0]
     if hasattr(close_col, "iloc") and len(close_col.shape) == 2:
         close_col = close_col.iloc[:, 0]
-    foreign_per_eur = float(close_col.iloc[-1])
+
+    # Populate cache for all dates in the downloaded window (backtest efficiency).
+    if as_of is not None:
+        for idx, val in close_col.items():
+            d = idx.date() if hasattr(idx, "date") else idx
+            if float(val) > 0:
+                _CACHE[(currency, d)] = 1.0 / float(val)
+
+        cutoff = pd.Timestamp(as_of).tz_localize(None)
+        subset = close_col[close_col.index <= cutoff]
+        if subset.empty:
+            raise RuntimeError(f"No FX data for {pair} on or before {as_of}")
+        foreign_per_eur = float(subset.iloc[-1])
+    else:
+        foreign_per_eur = float(close_col.iloc[-1])
+
     if foreign_per_eur <= 0:
         raise RuntimeError(f"Invalid FX close for {pair}: {foreign_per_eur}")
     return 1.0 / foreign_per_eur

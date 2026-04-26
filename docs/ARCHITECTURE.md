@@ -1,5 +1,7 @@
 # Architecture
 
+For a concise assistant-oriented overview, read **[AGENTS.md](../AGENTS.md)** and **[CONTEXT_FOR_AI.md](CONTEXT_FOR_AI.md)** first.
+
 ## High-level flow
 
 ```mermaid

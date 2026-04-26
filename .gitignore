@@ -16,6 +16,7 @@ env/
 .env
 .env.*
 !.env.example
+.streamlit/secrets.toml
 
 # Data artifacts (keep directory, drop contents)
 data/*.db
@@ -29,8 +30,14 @@ data/contracts.json
 # Local brief / notes (may contain private context)
 initial chat.pdf
 
+# Offline research script outputs (regeneratable CSVs)
+analysis/out/
+
 # OS / IDE
 .DS_Store
 Thumbs.db
 .idea/
 .vscode/
+.claude/
+.cursor/
+.cursorignore
