@@ -179,10 +179,24 @@ def _kpis_for(bot: dict, equity_df: pd.DataFrame, trades_df: pd.DataFrame) -> di
     bot_eq = equity_df[equity_df["bot_id"] == bot["id"]].sort_values("date")
     ser = bot_eq["total"]
     if ser.empty:
-        total = float(bot["initial_eur"])
-        cash = total
-        invested = 0.0
-        ret = 0.0
+        # No equity snapshot yet (e.g. first run crashed after fills were committed).
+        # Compute cash and invested directly from the DB so the dashboard shows
+        # real numbers instead of the initial capital.
+        try:
+            from core.db import get_session
+            from core.portfolio import Portfolio
+            with get_session() as s:
+                cash     = Portfolio.cash_eur(s, int(bot["id"]))
+                positions = Portfolio.open_positions(s, int(bot["id"]))
+                # Use avg_entry_eur as price proxy (market prices not available here;
+                # IBKR-backed KPIs will override this with real market values anyway).
+                invested = sum(p.qty * p.avg_entry_eur for p in positions)
+            total = cash + invested
+        except Exception:
+            total    = float(bot["initial_eur"])
+            cash     = total
+            invested = 0.0
+        ret    = total / float(bot["initial_eur"]) - 1.0 if bot["initial_eur"] else 0.0
         sharpe = float("nan")
         max_dd = 0.0
     else:
