@@ -189,9 +189,9 @@ def main() -> int:
                 explanation = explain_trades(r.bot_id, trades_for_agent, today)
                 if explanation:
                     log.info(
-                        "\n=== EXPLICACIÓ D'OPERACIONS (bot=%d) ===\n%s\n"
-                        "=" * 45,
-                        r.bot_id, explanation,
+                        "%s",
+                        f"\n{'='*45}\n=== EXPLICACIÓ D'OPERACIONS (bot={r.bot_id}) ===\n"
+                        f"{explanation}\n{'='*45}",
                     )
                     # Persist to the RunLog so the dashboard can show it
                     with get_session() as s:

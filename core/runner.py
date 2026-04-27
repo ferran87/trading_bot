@@ -197,7 +197,7 @@ def _resolve_pending_orders_all_bots() -> None:
     ``agents.reconciliation.resolve_pending_orders()``.  Failures are logged
     but never block the main run.
     """
-    from agents.reconciliation import resolve_pending_orders, import_manual_positions
+    from agents.reconciliation import resolve_pending_orders, import_manual_positions, cancel_orphan_orders
 
     try:
         with get_session() as s:
@@ -221,6 +221,19 @@ def _resolve_pending_orders_all_bots() -> None:
 
     for port, ids in port_to_bots.items():
         primary = ids[0] if ids else None
+
+        # 0. Cancel orphan IBKR orders (placed by crashed runs, not in DB)
+        try:
+            cancelled = cancel_orphan_orders(ids, port)
+            if cancelled:
+                log.info(
+                    "_resolve_pending_orders: cancelled %d orphan order(s) on port %d",
+                    cancelled, port,
+                )
+        except Exception as exc:
+            log.warning(
+                "_resolve_pending_orders: cancel_orphan port=%d failed: %s", port, exc
+            )
 
         # 1. Resolve pending DB orders against actual IBKR fills
         try:

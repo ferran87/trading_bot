@@ -453,6 +453,69 @@ def resolve_pending_orders(
     return resolved
 
 
+def cancel_orphan_orders(
+    bot_ids: list[int],
+    ibkr_port: int,
+) -> int:
+    """Cancel any open IBKR orders that have no matching pending DB trade.
+
+    These 'orphan' orders are typically left behind by bot runs that crashed
+    after sending the order to IBKR but before writing the fill to the DB.
+    If not cancelled they can double-fill on the next market session.
+
+    Returns the number of orders cancelled.
+    """
+    from core.db import Trade as TradeModel, get_session
+
+    # Collect permIds of legitimately pending DB trades
+    with get_session() as s:
+        pending_trades = (
+            s.query(TradeModel)
+            .filter(
+                TradeModel.status == "pending",
+                TradeModel.bot_id.in_(bot_ids),
+            )
+            .all()
+        )
+    known_perm_ids: set[int] = set()
+    for t in pending_trades:
+        try:
+            known_perm_ids.add(int(t.broker_order_id))
+        except (TypeError, ValueError):
+            pass
+
+    try:
+        from ib_async import IB
+        ib = IB()
+        ib.connect("127.0.0.1", ibkr_port, clientId=102, timeout=5)
+        ib.sleep(2)
+        open_trades = ib.reqAllOpenOrders()
+        ib.sleep(1)
+
+        cancelled = 0
+        for trade in open_trades:
+            perm_id = trade.order.permId
+            if perm_id and perm_id not in known_perm_ids:
+                log.warning(
+                    "cancel_orphan_orders: cancelling orphan order "
+                    "orderId=%d permId=%d %s %s %s (not in DB pending trades)",
+                    trade.order.orderId, perm_id,
+                    trade.order.action, trade.order.totalQuantity,
+                    trade.contract.symbol,
+                )
+                ib.cancelOrder(trade.order)
+                cancelled += 1
+
+        if cancelled:
+            ib.sleep(2)  # let cancels propagate
+        ib.disconnect()
+        return cancelled
+
+    except Exception as exc:
+        log.warning("cancel_orphan_orders: failed on port %d: %s", ibkr_port, exc)
+        return 0
+
+
 def format_report(discrepancies: list[Discrepancy]) -> str:
     """Format discrepancies as a human-readable string for logs / dashboard."""
     if not discrepancies:
