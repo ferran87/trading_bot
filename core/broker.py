@@ -277,14 +277,37 @@ class IBKRBroker:
         ib_order.outsideRth = False
 
         log.info(
-            "IBKRBroker: placing %s %.4f %s @MKT (%s/%s %s)",
+            "IBKRBroker: placing %s %.0f %s @MKT (%s/%s %s)",
             action, qty, order.ticker, entry["symbol"], entry["exchange"],
             entry["currency"],
         )
         trade = self._ib.placeOrder(contract, ib_order)
 
-        # Block until the order reaches a terminal state.
-        deadline = self._timeout
+        # ── Phase 1: brief wait to let IBKR classify the order ────────────────
+        # PreSubmitted  → order accepted by IB but exchange not open yet
+        #                 (typical for US stocks placed before 15:30 CEST).
+        #                 We return a *pending* fill immediately so the virtual
+        #                 book reserves the capital; the order stays live at
+        #                 IBKR and will fill when the exchange opens.
+        # Submitted     → order is live at the exchange; wait for fill normally.
+        PRESUBMIT_WAIT_SEC = 5
+        initial_wait = 0.0
+        while initial_wait < PRESUBMIT_WAIT_SEC and not trade.isDone():
+            self._ib.waitOnUpdate(timeout=1.0)
+            initial_wait += 1.0
+            if trade.orderStatus.status in ("Submitted", "Filled"):
+                break  # it's live — proceed to normal fill wait
+
+        if trade.orderStatus.status == "PreSubmitted" and not trade.isDone():
+            log.info(
+                "IBKRBroker: %s order PreSubmitted (market not open yet) — "
+                "recording as pending; will fill when exchange opens",
+                order.ticker,
+            )
+            return self._build_pending_fill(order, trade, entry)
+
+        # ── Phase 2: wait for the confirmed fill ───────────────────────────────
+        deadline = self._timeout - initial_wait
         while not trade.isDone():
             self._ib.waitOnUpdate(timeout=1.0)
             deadline -= 1.0
@@ -298,17 +321,10 @@ class IBKRBroker:
                     self._ib.waitOnUpdate(timeout=0.5)
                     if trade.isDone():
                         break
-                last_status = trade.orderStatus.status
-                hint = (
-                    " Order was PreSubmitted (market not open yet — US stocks don't "
-                    "open until 15:30 CEST). The cancel was sent; re-run after market open."
-                    if last_status == "PreSubmitted"
-                    else " MKT on Xetra/US listings usually needs the exchange open "
-                    "(Mon–Fri RTH). Weekend runs will queue or time out."
-                )
                 raise RuntimeError(
                     f"IBKRBroker: order for {order.ticker} did not fill within "
-                    f"{self._timeout}s (last status={last_status!r}).{hint}"
+                    f"{self._timeout}s (last status={trade.orderStatus.status!r}). "
+                    "MKT on Xetra listings needs the exchange open (Mon–Fri RTH)."
                 )
 
         status = trade.orderStatus.status
@@ -321,6 +337,40 @@ class IBKRBroker:
         return self._build_fill(order, trade, entry)
 
     # -- fill aggregation --
+
+    def _build_pending_fill(self, order: Order, trade, contract_entry: dict) -> Fill:
+        """Return an *estimated* Fill for a PreSubmitted order.
+
+        The order is live at IBKR and will fill when the exchange opens.
+        We use ``order.ref_price_eur`` as the price estimate and the planned
+        (floored) qty so the virtual book reserves the capital immediately.
+        The reconciliation agent will correct these values once the actual
+        fill arrives.
+
+        We store the IBKR ``permId`` (not the session-scoped orderId) in
+        ``broker_order_id`` so reconciliation can look it up across sessions.
+        """
+        from core import fx
+
+        ccy = contract_entry["currency"]
+        fx_rate = fx.eur_per_unit(ccy)
+        # estimated local-currency price
+        est_local = order.ref_price_eur / fx_rate if fx_rate > 0 else order.ref_price_eur
+        planned_qty = float(trade.order.totalQuantity)  # already floored
+        perm_id = str(trade.order.permId) if trade.order.permId else None
+
+        return Fill(
+            ticker=order.ticker,
+            side=order.side,
+            qty=planned_qty,
+            price=est_local,
+            price_eur=order.ref_price_eur,
+            fx_rate=fx_rate,
+            fee_eur=estimate_fee_eur(order.ticker, planned_qty, order.ref_price_eur),
+            timestamp=datetime.now(tz=timezone.utc),
+            broker_order_id=perm_id,
+            is_pending=True,
+        )
 
     def _build_fill(self, order: Order, trade, contract_entry: dict) -> Fill:
         """Aggregate executions from `trade.fills` into a single Fill record.

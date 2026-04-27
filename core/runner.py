@@ -190,6 +190,49 @@ def _broker_for_bot(bot_id: int, trading_mode: str = "paper") -> "BrokerInterfac
     raise ValueError(f"Unknown BROKER_BACKEND={backend!r}")
 
 
+def _resolve_pending_orders_all_bots() -> None:
+    """Resolve pending IBKR orders for all bots before the daily run.
+
+    Groups bots by IBKR port (so we only connect once per Gateway) and calls
+    ``agents.reconciliation.resolve_pending_orders()``.  Failures are logged
+    but never block the main run.
+    """
+    from agents.reconciliation import resolve_pending_orders
+
+    try:
+        with get_session() as s:
+            enabled_bots = s.query(Bot).filter(Bot.enabled == 1).all()
+            bot_ids = [b.id for b in enabled_bots]
+    except Exception as exc:
+        log.warning("_resolve_pending_orders: DB error fetching bots: %s", exc)
+        return
+
+    # Collect unique ports across all enabled bots
+    bot_cfgs = {b["id"]: b for b in CONFIG.strategies.get("bots", [])}
+    port_to_bots: dict[int, list[int]] = {}
+    for bot_id in bot_ids:
+        cfg = bot_cfgs.get(bot_id, {})
+        # Use paper port by default (all bots currently paper).
+        port = cfg.get("ibkr_port_paper") or cfg.get("ibkr_port")
+        if port is None:
+            continue
+        port = int(port)
+        port_to_bots.setdefault(port, []).append(bot_id)
+
+    for port, ids in port_to_bots.items():
+        try:
+            resolved = resolve_pending_orders(ids, port)
+            if resolved:
+                log.info(
+                    "_resolve_pending_orders: resolved %d pending order(s) on port %d",
+                    resolved, port,
+                )
+        except Exception as exc:
+            log.warning(
+                "_resolve_pending_orders: port=%d failed: %s", port, exc
+            )
+
+
 def run_once(
     today: date | None = None,
     *,
@@ -207,6 +250,12 @@ def run_once(
     """
     today = today or datetime.now(tz=timezone.utc).date()
     validate_run_dates(today, as_of)
+
+    # ── Pre-run: resolve any pending orders from previous sessions ─────────────
+    # Only for IBKR backend; mock needs no reconciliation.
+    if CONFIG.broker_backend == "ibkr":
+        _resolve_pending_orders_all_bots()
+
     reports: list[executor.ExecutionReport] = []
     with get_session() as session:
         bots = session.query(Bot).order_by(Bot.id).all()

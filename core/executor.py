@@ -77,16 +77,34 @@ def run_orders(
             continue
 
         fill = broker.place_market_order(order)
+
+        if fill.qty == 0:
+            log.warning(
+                "SKIPPED  bot=%d %s %s — qty rounded to 0 (increase capital or "
+                "check per_position_pct)",
+                bot_id, order.side.value, order.ticker,
+            )
+            continue
+
         Portfolio.apply_fill(session, bot_id, fill, order.signal_reason)
         # Commit immediately so a crash after broker fill cannot lose this trade.
         # Later commits in runner (equity snapshot, RunLog) are independent of fills.
         session.commit()
         report.approved.append((order, fill))
-        log.info(
-            "FILLED   bot=%d %s %s qty=%.4f @ %.4f EUR fee=%.2f -- %s",
-            bot_id, order.side.value, order.ticker, fill.qty, fill.price_eur,
-            fill.fee_eur, order.signal_reason,
-        )
+
+        if fill.is_pending:
+            log.info(
+                "PENDING  bot=%d %s %s qty=%.0f est.price=%.4f EUR -- %s "
+                "(order queued at IBKR, will fill when market opens)",
+                bot_id, order.side.value, order.ticker, fill.qty, fill.price_eur,
+                order.signal_reason,
+            )
+        else:
+            log.info(
+                "FILLED   bot=%d %s %s qty=%.4f @ %.4f EUR fee=%.2f -- %s",
+                bot_id, order.side.value, order.ticker, fill.qty, fill.price_eur,
+                fill.fee_eur, order.signal_reason,
+            )
 
         # Refresh snapshot in place. Cheap: reads a handful of rows.
         refreshed = Portfolio.snapshot(

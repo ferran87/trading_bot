@@ -68,6 +68,9 @@ class Trade(Base):
     signal_reason = Column(Text, nullable=False, default="")
     order_type = Column(String, nullable=False, default="MARKET")
     broker_order_id = Column(String, nullable=True)
+    # "filled" — confirmed fill  |  "pending" — order sent, awaiting fill
+    # "cancelled" — order cancelled before fill
+    status = Column(String, nullable=False, default="filled")
 
     bot = relationship("Bot", back_populates="trades")
 
@@ -161,6 +164,7 @@ def _migrate(eng) -> None:
     from sqlalchemy import text
     migrations = [
         "ALTER TABLE run_logs ADD COLUMN explanation TEXT",
+        "ALTER TABLE trades ADD COLUMN status TEXT NOT NULL DEFAULT 'filled'",
     ]
     with eng.connect() as conn:
         for sql in migrations:

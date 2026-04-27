@@ -234,6 +234,7 @@ def _trades(limit: int = 500) -> pd.DataFrame:
                     "total_eur": round(t.qty * t.price_eur, 2),
                     "comissió_eur": round(t.fee_eur, 2),
                     "senyal": t.signal_reason,
+                    "estat": getattr(t, "status", "filled"),  # "filled" | "pending"
                 }
                 for t in rows
             ]

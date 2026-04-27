@@ -80,11 +80,20 @@ class Portfolio:
         bot_id: int,
         fill: Fill,
         signal_reason: str,
-    ) -> Trade:
+    ) -> Trade | None:
         """Records the trade, updates/creates/removes the Position row.
 
-        Returns the persisted Trade object. Caller commits.
+        Returns the persisted Trade object, or None if the fill has qty=0
+        (i.e. fractional share rounded to zero — nothing to record).
+
+        Pending fills (``fill.is_pending=True``) are recorded with
+        ``status='pending'`` and optimistically update the position using the
+        estimated price so the virtual book reflects committed capital.
+        Caller commits.
         """
+        if fill.qty == 0:
+            return None
+
         trade = Trade(
             bot_id=bot_id,
             timestamp=fill.timestamp,
@@ -98,6 +107,7 @@ class Portfolio:
             signal_reason=signal_reason,
             order_type="MARKET",
             broker_order_id=fill.broker_order_id,
+            status="pending" if fill.is_pending else "filled",
         )
         session.add(trade)
 

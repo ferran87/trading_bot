@@ -173,6 +173,150 @@ def reconcile_positions(
     return discrepancies
 
 
+def resolve_pending_orders(
+    bot_ids: list[int],
+    ibkr_port: int,
+) -> int:
+    """Resolve pending DB trades against actual IBKR positions.
+
+    For each bot in ``bot_ids`` we look at trades with ``status='pending'``
+    and compare them against live IBKR positions.  If IBKR holds the expected
+    qty (within 1 share tolerance) we mark the trade as ``'filled'`` and
+    correct the fill price using IBKR's ``avgCost``.
+
+    Returns the number of trades resolved.
+
+    Strategy
+    --------
+    We use IBKR **positions** (not executions) because:
+    * Positions are always fresh regardless of clientId / session.
+    * We just need to confirm the shares landed — we update price with avgCost.
+    * Works even if the previous session crashed before recording the fill.
+    """
+    from core.db import Trade as TradeModel, Position as PositionModel, get_session
+    from core.config import DATA_DIR
+    import json
+
+    with get_session() as s:
+        pending = (
+            s.query(TradeModel)
+            .filter(
+                TradeModel.status == "pending",
+                TradeModel.bot_id.in_(bot_ids),
+            )
+            .all()
+        )
+
+    if not pending:
+        return 0
+
+    # Load contracts.json for local-symbol → ticker mapping
+    contracts_path = DATA_DIR / "contracts.json"
+    contracts: dict = {}
+    if contracts_path.exists():
+        contracts = json.loads(contracts_path.read_text(encoding="utf-8"))
+    # Build localSymbol → ticker reverse map
+    local_to_ticker: dict[str, str] = {
+        info.get("local_symbol") or info.get("symbol", tk): tk
+        for tk, info in contracts.items()
+    }
+
+    ibkr_pos = _ibkr_positions(ibkr_port)  # {localSymbol: qty}
+    if ibkr_pos is None:
+        log.warning("resolve_pending_orders: cannot reach IBKR — will retry next run")
+        return 0
+
+    # Fetch avgCost per symbol from a separate IBKR call (ib.portfolio())
+    ibkr_avg_cost: dict[str, float] = {}
+    try:
+        from ib_async import IB
+        ib = IB()
+        ib.connect("127.0.0.1", ibkr_port, clientId=57, timeout=5)
+        ib.sleep(1)
+        for item in ib.portfolio():
+            sym = item.contract.localSymbol or item.contract.symbol
+            ibkr_avg_cost[sym] = float(item.averageCost)
+        ib.disconnect()
+    except Exception as exc:
+        log.warning("resolve_pending_orders: could not fetch avgCost: %s", exc)
+
+    resolved = 0
+    with get_session() as s:
+        # Re-query inside this session for proper ORM tracking
+        pending_ids = [t.id for t in pending]
+        for trade in s.query(TradeModel).filter(TradeModel.id.in_(pending_ids)).all():
+            ticker = trade.ticker
+            # Find the IBKR local symbol for this ticker
+            entry = contracts.get(ticker, {})
+            local_sym = entry.get("local_symbol") or entry.get("symbol") or ticker
+            ibkr_qty = ibkr_pos.get(local_sym, 0.0)
+
+            if ibkr_qty < 1:
+                log.debug(
+                    "resolve_pending_orders: %s still not in IBKR positions (qty=%.2f)",
+                    ticker, ibkr_qty,
+                )
+                continue
+
+            # Confirm qty matches (within 2 shares to allow partial fills)
+            qty_ok = abs(ibkr_qty - trade.qty) <= 2
+            if not qty_ok:
+                log.warning(
+                    "resolve_pending_orders: %s expected qty=%.0f but IBKR has %.0f "
+                    "— leaving as pending for manual review",
+                    ticker, trade.qty, ibkr_qty,
+                )
+                continue
+
+            # Update trade with actual fill data
+            avg_cost_local = ibkr_avg_cost.get(local_sym)
+            if avg_cost_local and avg_cost_local > 0:
+                from core import fx
+                ccy = entry.get("currency", "EUR")
+                fx_rate = fx.eur_per_unit(ccy)
+                trade.price = avg_cost_local
+                trade.price_eur = avg_cost_local * fx_rate
+                trade.fx_rate = fx_rate
+                # Recalculate fee with actual price
+                trade.fee_eur = estimate_fee_eur(ticker, ibkr_qty, trade.price_eur)
+
+            trade.qty = ibkr_qty
+            trade.status = "filled"
+
+            # Update the Position row with corrected qty and avg_entry
+            pos = (
+                s.query(PositionModel)
+                .filter(
+                    PositionModel.bot_id == trade.bot_id,
+                    PositionModel.ticker == ticker,
+                )
+                .one_or_none()
+            )
+            if pos is not None:
+                pos.qty = ibkr_qty
+                pos.avg_entry_eur = trade.price_eur
+            else:
+                from datetime import date
+                s.add(PositionModel(
+                    bot_id=trade.bot_id,
+                    ticker=ticker,
+                    qty=ibkr_qty,
+                    avg_entry_eur=trade.price_eur,
+                    entry_date=trade.timestamp.date(),
+                ))
+
+            log.info(
+                "resolve_pending_orders: resolved %s bot=%d qty=%.0f avg_eur=%.4f",
+                ticker, trade.bot_id, ibkr_qty, trade.price_eur,
+            )
+            resolved += 1
+
+        if resolved:
+            s.commit()
+
+    return resolved
+
+
 def format_report(discrepancies: list[Discrepancy]) -> str:
     """Format discrepancies as a human-readable string for logs / dashboard."""
     if not discrepancies:

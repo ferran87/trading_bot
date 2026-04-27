@@ -33,17 +33,24 @@ class Order:
 
 @dataclass(frozen=True)
 class Fill:
-    """What the broker actually did."""
+    """What the broker actually did (or intends to do for pending orders).
+
+    ``is_pending=True`` means the order was accepted by IBKR but not yet
+    executed (e.g. US stock placed before market open).  ``qty`` and
+    ``price_eur`` are *estimates* based on ``ref_price_eur``; they will be
+    corrected by the reconciliation agent once the actual fill is confirmed.
+    """
 
     ticker: str
     side: Side
     qty: float
-    price: float            # local-currency fill price
-    price_eur: float        # converted to EUR
+    price: float            # local-currency fill price (estimated if pending)
+    price_eur: float        # converted to EUR       (estimated if pending)
     fx_rate: float
     fee_eur: float
     timestamp: datetime
     broker_order_id: str | None = None
+    is_pending: bool = False
 
 
 @dataclass

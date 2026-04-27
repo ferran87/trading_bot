@@ -586,8 +586,19 @@ def _render_risk_and_trades(
             if active.empty:
                 st.caption("Encara no hi ha operacions.")
             else:
-                st.dataframe(active.drop(columns=["bot_id"], errors="ignore"),
-                             use_container_width=True, hide_index=True)
+                display = active.drop(columns=["bot_id"], errors="ignore").copy()
+                # Add a visual pending badge in the estat column
+                if "estat" in display.columns:
+                    pending_mask = display["estat"] == "pending"
+                    if pending_mask.any():
+                        st.warning(
+                            f"⏳ **{pending_mask.sum()} ordre(s) pendent(s)** — enviada a IBKR, "
+                            "s'executarà quan el mercat obri. Es reconciliarà automàticament demà."
+                        )
+                    display["estat"] = display["estat"].map(
+                        {"filled": "✅ executat", "pending": "⏳ pendent", "cancelled": "❌ cancel·lat"}
+                    ).fillna("✅ executat")
+                st.dataframe(display, use_container_width=True, hide_index=True)
 
 
 def _render_run_logs(bots_subset: pd.DataFrame) -> None:
