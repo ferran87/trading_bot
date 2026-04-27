@@ -239,8 +239,38 @@ class IBKRBroker:
             raise RuntimeError("IBKRBroker: not connected. Call connect() first.")
 
         contract, entry = self._contract_for(order.ticker)
+        # Use SMART routing so IBKR picks the best venue.
+        # Direct-exchange routing (e.g. SBF, IBIS) triggers Precautionary
+        # Settings error 10311.  conId already uniquely identifies the instrument
+        # so SMART routing resolves correctly.
+        contract.exchange = "SMART"
         action = "BUY" if order.side is Side.BUY else "SELL"
         qty = abs(order.qty)
+
+        # IBKR API rejects fractional quantities (error 10243) for most
+        # instruments. Floor to whole shares; if result is 0, skip the order.
+        import math
+        qty = math.floor(qty)
+        if qty == 0:
+            log.warning(
+                "IBKRBroker: %s %s qty rounded down to 0 — skipping "
+                "(increase capital or check per_position_pct)",
+                action, order.ticker,
+            )
+            # Return a zero fill so the caller doesn't crash.
+            from datetime import datetime, timezone
+            from core.types import Fill, Side as _Side
+            return Fill(
+                ticker=order.ticker,
+                side=order.side,
+                qty=0.0,
+                price=0.0,
+                price_eur=0.0,
+                fx_rate=1.0,
+                fee_eur=0.0,
+                timestamp=datetime.now(tz=timezone.utc),
+                broker_order_id=None,
+            )
 
         ib_order = MarketOrder(action=action, totalQuantity=qty)
         ib_order.tif = "DAY"
@@ -263,17 +293,22 @@ class IBKRBroker:
                     "IBKRBroker: %s order still %s after %.0fs — canceling at broker",
                     order.ticker, trade.orderStatus.status, self._timeout,
                 )
-                self._ib.cancelOrder(contract, ib_order)
+                self._ib.cancelOrder(ib_order)
                 for _ in range(20):
                     self._ib.waitOnUpdate(timeout=0.5)
                     if trade.isDone():
                         break
+                last_status = trade.orderStatus.status
+                hint = (
+                    " Order was PreSubmitted (market not open yet — US stocks don't "
+                    "open until 15:30 CEST). The cancel was sent; re-run after market open."
+                    if last_status == "PreSubmitted"
+                    else " MKT on Xetra/US listings usually needs the exchange open "
+                    "(Mon–Fri RTH). Weekend runs will queue or time out."
+                )
                 raise RuntimeError(
                     f"IBKRBroker: order for {order.ticker} did not fill within "
-                    f"{self._timeout}s (last status={trade.orderStatus.status!r}). "
-                    "MKT on Xetra/US listings usually needs the exchange open "
-                    "(Mon–Fri RTH). Weekend runs will queue or time out; try again "
-                    "Monday morning EU hours, or use mock for offline checks."
+                    f"{self._timeout}s (last status={last_status!r}).{hint}"
                 )
 
         status = trade.orderStatus.status
