@@ -438,6 +438,8 @@ def _render_positions(
 
     if use_ibkr:
         # ── IBKR-backed positions display ─────────────────────────────────────
+        from dashboard.queries import _asset_names
+        asset_names = _asset_names()
         rate = _eur_per_usd()
         # Build ticker → bot attribution map from SQLite
         bot_ids_in_scope = set(bots_subset["id"].tolist())
@@ -476,6 +478,7 @@ def _render_positions(
             rows.append({
                 "bot":           bot_lbl,
                 "ticker":        ticker,
+                "nom":           asset_names.get(ticker, ticker),
                 "qty":           qty,
                 "data entrada":  entry_dt,
                 "dies":          dies,

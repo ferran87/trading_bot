@@ -167,17 +167,68 @@ def _equity_history() -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def _asset_names() -> dict[str, str]:
-    """Carrega els noms complets des de contracts.json."""
+    """Carrega els noms complets des de contracts.json, amb fallback per tickers no resolts."""
     from core.config import DATA_DIR
 
-    path = DATA_DIR / "contracts.json"
-    if not path.exists():
-        return {}
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return {
-        ticker: entry.get("long_name", ticker).title()
-        for ticker, entry in data.items()
+    # Supplementary / override names.
+    # Used for: (a) tickers not in contracts.json, (b) IBKR names that have
+    # awkward casing or truncation (e.g. "LVMH MOET HENNESSY LOUIS VUI").
+    _FALLBACK_NAMES: dict[str, str] = {
+        # Tickers not resolved via IBKR (stocks_aggressive universe)
+        "TSLA":    "Tesla Inc",
+        "AMD":     "Advanced Micro Devices",
+        "PLTR":    "Palantir Technologies",
+        # Brand-name overrides (IBKR names have awkward casing / truncation)
+        "MC.PA":   "LVMH Moët Hennessy",
+        "SXR8.DE": "iShares Core S&P 500 UCITS",
+        "SXRV.DE": "iShares NASDAQ 100 UCITS",
+        "EXSA.DE": "iShares Euro Stoxx 600 UCITS",
+        "XDWD.DE": "Xtrackers MSCI World UCITS",
+        "QDVE.DE": "iShares S&P 500 IT Sector",
+        "QDVH.DE": "iShares S&P 500 Financials",
+        "ZPRR.DE": "SPDR Russell 2000 UCITS",
+        "BTCE.DE": "WisdomTree Physical Bitcoin",
+        "ZETH.DE": "21Shares Ethereum ETP",
+        "ISJP.DE": "iShares MSCI Japan Small Cap",
+        "SXR1.DE": "iShares Core MSCI Pacific ex-JP",
+        "TTE.PA":  "TotalEnergies SE",
+        "NESN.SW": "Nestlé SA",
+        "NOVN.SW": "Novartis AG",
+        "ASML.AS": "ASML Holding NV",
     }
+
+    path = DATA_DIR / "contracts.json"
+    names: dict[str, str] = dict(_FALLBACK_NAMES)
+
+    if path.exists():
+        data = json.loads(path.read_text(encoding="utf-8"))
+        for ticker, entry in data.items():
+            raw = entry.get("long_name") or ticker
+            # title() handles all-caps; special-case common abbreviations
+            nice = _title_name(raw)
+            names[ticker] = nice
+
+    return names
+
+
+def _title_name(s: str) -> str:
+    """Convert an ALL-CAPS company name to Title Case with sensible exceptions."""
+    # Preserve common abbreviations / legal suffixes correctly
+    _KEEP = {
+        "AG": "AG", "SE": "SE", "NV": "NV", "SA": "SA", "PLC": "PLC",
+        "INC": "Inc", "CORP": "Corp", "CO": "Co", "LLC": "LLC",
+        "ETF": "ETF", "UCITS": "UCITS", "USD": "USD", "EUR": "EUR",
+        "ACC": "Acc", "DIS": "Dis", "REG": "Reg", "CL": "Cl",
+        "S&P": "S&P", "MSCI": "MSCI", "SPDR": "SPDR",
+    }
+    words = []
+    for word in s.split():
+        upper = word.upper().rstrip("-")
+        if upper in _KEEP:
+            words.append(_KEEP[upper] + word[len(upper):])
+        else:
+            words.append(word.capitalize())
+    return " ".join(words)
 
 
 @st.cache_data(ttl=30)

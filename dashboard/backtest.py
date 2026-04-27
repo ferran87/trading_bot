@@ -10,7 +10,7 @@ import streamlit as st
 from analysis.market_regime import REGIME_LABELS, compute_regimes, regime_spans
 from backtesting.engine import run_backtest
 
-from dashboard.kpis import _analyze_bt_positions
+from dashboard.kpis import _analyze_bt_positions, ticker_name
 from dashboard.queries import _fetch_prices_eur
 
 
@@ -34,14 +34,27 @@ def render_backtest_tab(bots_df: pd.DataFrame, floor: float) -> None:
 
     bt_col1, bt_col2, bt_col3, bt_col4 = st.columns([2, 1, 1, 1])
     with bt_col1:
-        bt_bot_options = {
-            f"Bot {row['id']} — {row['name']}": row["id"]
-            for _, row in bots_df[bots_df["enabled"]].iterrows()
-        }
+        # Show ALL bots for this owner (enabled or not) — backtest is independent
+        # of whether a bot is currently active in the live/paper account.
+        all_bots = bots_df.drop_duplicates(subset=["id"])
+        bt_bot_options = {}
+        for _, row in all_bots.iterrows():
+            mode_badge = "📄" if row.get("trading_mode", "paper") == "paper" else "💶"
+            status_badge = "" if row.get("enabled", False) else " ⏸"
+            label = f"{mode_badge} Bot {row['id']} — {row['name']}{status_badge}"
+            bt_bot_options[label] = row["id"]
+
+        # Default to paper bots only (avoid showing duplicate paper+live of same strategy)
+        paper_ids = set(
+            row["id"] for _, row in all_bots.iterrows()
+            if row.get("trading_mode", "paper") == "paper"
+        )
+        default_labels = [lbl for lbl, bid in bt_bot_options.items() if bid in paper_ids]
+
         selected_labels = st.multiselect(
             "Bots a simular",
             options=list(bt_bot_options.keys()),
-            default=list(bt_bot_options.keys()),
+            default=default_labels,
         )
         selected_bot_ids = [bt_bot_options[lbl] for lbl in selected_labels]
 
@@ -240,4 +253,11 @@ def render_backtest_tab(bots_df: pd.DataFrame, floor: float) -> None:
                 if res.trades_df.empty:
                     st.caption("Cap operació durant el període.")
                 else:
-                    st.dataframe(res.trades_df, use_container_width=True, hide_index=True)
+                    trade_display = res.trades_df.copy()
+                    if "ticker" in trade_display.columns and "nom" not in trade_display.columns:
+                        trade_display.insert(
+                            trade_display.columns.get_loc("ticker") + 1,
+                            "nom",
+                            trade_display["ticker"].map(ticker_name),
+                        )
+                    st.dataframe(trade_display, use_container_width=True, hide_index=True)

@@ -58,6 +58,18 @@ _TICKER_NAMES: dict[str, str] = {
 
 
 def ticker_name(ticker: str) -> str:
+    """Return a human-readable name for a ticker.
+
+    Priority: contracts.json long_name (via _asset_names) → _TICKER_NAMES → ticker.
+    _asset_names uses @st.cache_data so it's fast after the first call.
+    """
+    try:
+        from dashboard.queries import _asset_names
+        names = _asset_names()
+        if ticker in names and names[ticker] != ticker:
+            return names[ticker]
+    except Exception:
+        pass
     return _TICKER_NAMES.get(ticker, ticker)
 
 
