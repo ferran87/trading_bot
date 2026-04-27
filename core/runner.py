@@ -197,7 +197,7 @@ def _resolve_pending_orders_all_bots() -> None:
     ``agents.reconciliation.resolve_pending_orders()``.  Failures are logged
     but never block the main run.
     """
-    from agents.reconciliation import resolve_pending_orders
+    from agents.reconciliation import resolve_pending_orders, import_manual_positions
 
     try:
         with get_session() as s:
@@ -220,6 +220,9 @@ def _resolve_pending_orders_all_bots() -> None:
         port_to_bots.setdefault(port, []).append(bot_id)
 
     for port, ids in port_to_bots.items():
+        primary = ids[0] if ids else None
+
+        # 1. Resolve pending DB orders against actual IBKR fills
         try:
             resolved = resolve_pending_orders(ids, port)
             if resolved:
@@ -230,6 +233,19 @@ def _resolve_pending_orders_all_bots() -> None:
         except Exception as exc:
             log.warning(
                 "_resolve_pending_orders: port=%d failed: %s", port, exc
+            )
+
+        # 2. Import manual positions from IBKR that are not in SQLite
+        try:
+            imported = import_manual_positions(ids, port, primary_bot_id=primary)
+            if imported:
+                log.info(
+                    "_resolve_pending_orders: imported %d manual position(s) on port %d",
+                    imported, port,
+                )
+        except Exception as exc:
+            log.warning(
+                "_resolve_pending_orders: import_manual port=%d failed: %s", port, exc
             )
 
 

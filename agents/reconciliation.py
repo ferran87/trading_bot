@@ -173,6 +173,142 @@ def reconcile_positions(
     return discrepancies
 
 
+def import_manual_positions(
+    bot_ids: list[int],
+    ibkr_port: int,
+    primary_bot_id: int | None = None,
+) -> int:
+    """Import IBKR positions that are not tracked in any bot's SQLite records.
+
+    For each position in the IBKR account that has no matching SQLite Position
+    row (within a 1-share tolerance), we create:
+
+    * A ``Trade`` record with ``signal_reason='manual — imported from IBKR'``,
+      ``order_type='MANUAL'``, ``status='filled'``.
+    * A ``Position`` row with qty and avg_entry_eur from IBKR's ``avgCost``.
+
+    The trade is attributed to ``primary_bot_id`` (defaults to ``bot_ids[0]``).
+    Because these bots share the same paper account the cash impact is secondary;
+    IBKR-backed KPIs use IBKR's NetLiquidation as the source of truth anyway.
+
+    Positions listed in ``settings.yaml`` under
+    ``reconciliation.external_positions`` are skipped.
+
+    Returns the number of positions imported.
+    """
+    from core.db import Trade as TradeModel, Position as PositionModel, get_session
+    from datetime import datetime, timezone
+
+    if primary_bot_id is None and bot_ids:
+        primary_bot_id = bot_ids[0]
+    if primary_bot_id is None:
+        log.warning("import_manual_positions: no bot_id provided — skipping")
+        return 0
+
+    sqlite_pos = _sqlite_positions(bot_ids)   # {our_ticker: qty}
+    ibkr_pos   = _ibkr_positions(ibkr_port)  # {localSymbol: qty} or None
+    if ibkr_pos is None:
+        log.warning("import_manual_positions: cannot reach IBKR port %d", ibkr_port)
+        return 0
+
+    ticker_map = _build_ticker_map(bot_ids)   # {localSymbol: our_ticker}
+    external   = _external_positions()
+
+    # Fetch avgCost and currency per symbol
+    ibkr_avg_cost: dict[str, float] = {}
+    ibkr_ccy:      dict[str, str]   = {}
+    try:
+        from ib_async import IB
+        ib = IB()
+        ib.connect("127.0.0.1", ibkr_port, clientId=58, timeout=5)
+        ib.sleep(1)
+        for item in ib.portfolio():
+            sym = item.contract.localSymbol or item.contract.symbol
+            ibkr_avg_cost[sym] = float(item.averageCost)
+            ibkr_ccy[sym]      = item.contract.currency or "EUR"
+        ib.disconnect()
+    except Exception as exc:
+        log.warning("import_manual_positions: portfolio fetch failed: %s", exc)
+        return 0
+
+    from core import fx
+
+    imported = 0
+    now   = datetime.now(tz=timezone.utc)
+    today = now.date()
+
+    with get_session() as s:
+        for ibkr_sym, ibkr_qty in ibkr_pos.items():
+            if ibkr_qty <= 0:
+                continue
+
+            our_ticker = ticker_map.get(ibkr_sym, ibkr_sym)
+
+            # Skip if SQLite already tracks this within 1 share
+            if abs(sqlite_pos.get(our_ticker, 0.0) - ibkr_qty) < 1.0:
+                continue
+
+            # Skip explicitly excluded tickers
+            if our_ticker in external or ibkr_sym in external:
+                log.debug("import_manual_positions: skipping external %s", ibkr_sym)
+                continue
+
+            avg_cost_local = ibkr_avg_cost.get(ibkr_sym, 0.0)
+            ccy            = ibkr_ccy.get(ibkr_sym, "EUR")
+            fx_rate        = fx.eur_per_unit(ccy)
+            avg_cost_eur   = avg_cost_local * fx_rate if fx_rate > 0 else avg_cost_local
+
+            log.info(
+                "import_manual_positions: %s qty=%.2f @ €%.4f ccy=%s → bot=%d",
+                our_ticker, ibkr_qty, avg_cost_eur, ccy, primary_bot_id,
+            )
+
+            # Trade record — audit trail only; order_type=MANUAL flags it clearly
+            s.add(TradeModel(
+                bot_id=primary_bot_id,
+                timestamp=now,
+                ticker=our_ticker,
+                side="BUY",
+                qty=ibkr_qty,
+                price=avg_cost_local,
+                price_eur=avg_cost_eur,
+                fx_rate=fx_rate,
+                fee_eur=0.0,
+                signal_reason=f"manual — imported from IBKR ({ibkr_sym})",
+                order_type="MANUAL",
+                broker_order_id=None,
+                status="filled",
+            ))
+
+            # Position row — upsert
+            pos = (
+                s.query(PositionModel)
+                .filter(
+                    PositionModel.bot_id == primary_bot_id,
+                    PositionModel.ticker == our_ticker,
+                )
+                .one_or_none()
+            )
+            if pos is None:
+                s.add(PositionModel(
+                    bot_id=primary_bot_id,
+                    ticker=our_ticker,
+                    qty=ibkr_qty,
+                    avg_entry_eur=avg_cost_eur,
+                    entry_date=today,
+                ))
+            else:
+                pos.qty           = ibkr_qty
+                pos.avg_entry_eur = avg_cost_eur
+
+            imported += 1
+
+        if imported:
+            s.commit()
+
+    return imported
+
+
 def resolve_pending_orders(
     bot_ids: list[int],
     ibkr_port: int,

@@ -48,11 +48,12 @@ guardrails:
   # Update this when account size or number of bots changes.
   initial_capital_eur: 460000.0
 
-# Reconciliation — positions held in IBKR outside the bot's control.
-# These are excluded from the SQLite ↔ IBKR reconciliation check so they
-# don't generate false-positive discrepancy alerts.
+# Reconciliation — positions held in IBKR outside the bot's control that should
+# be EXCLUDED from the SQLite ↔ IBKR reconciliation and auto-import.
+# Leave empty to auto-import ALL untracked IBKR positions as "manual" trades.
+# Add tickers here only if you intentionally want to suppress them from the dashboard.
 reconciliation:
-  external_positions: [SXR1.DE]   # manually held positions, not bot-managed
+  external_positions: []   # SXR1.DE removed — now auto-imported as a manual position
 
 # Logging
 logging:

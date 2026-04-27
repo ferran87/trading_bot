@@ -649,12 +649,17 @@ def _render_reconciliation(bots_subset: pd.DataFrame, mode: str) -> None:
             if not discrepancies:
                 st.success("✅ Tot correcte — SQLite i IBKR coincideixen.")
             else:
+                has_untracked = any(
+                    d.get("ticker") not in ("IBKR_UNREACHABLE",) and d["ibkr_qty"] > 0 and d["sqlite_qty"] == 0
+                    for d in discrepancies
+                )
                 for d in discrepancies:
                     if d.get("ticker") == "IBKR_UNREACHABLE":
                         st.warning("⚡ Gateway IBKR no disponible ara mateix.")
                     elif d["severity"] == "ERROR":
+                        label = "👤 manual" if d["sqlite_qty"] == 0 else "desajust"
                         st.error(
-                            f"❌ **{d['ticker']}**: SQLite={d['sqlite_qty']:.2f}  "
+                            f"❌ **{d['ticker']}** ({label}): SQLite={d['sqlite_qty']:.2f}  "
                             f"IBKR={d['ibkr_qty']:.2f}  (diff={d['diff']:+.2f})"
                         )
                     else:
@@ -662,6 +667,27 @@ def _render_reconciliation(bots_subset: pd.DataFrame, mode: str) -> None:
                             f"⚠️ **{d['ticker']}**: SQLite={d['sqlite_qty']:.4f}  "
                             f"IBKR={d['ibkr_qty']:.4f}  (diff={d['diff']:+.4f})"
                         )
+
+                if has_untracked:
+                    st.caption(
+                        "Les posicions 'manual' existeixen a IBKR però no al SQLite. "
+                        "Prem el botó per importar-les automàticament."
+                    )
+                    if st.button("📥 Importar posicions manuals ara", key=f"import_manual_{port}"):
+                        primary = int(bots_subset["id"].iloc[0]) if not bots_subset.empty else None
+                        try:
+                            from agents.reconciliation import import_manual_positions
+                            n = import_manual_positions(list(bot_ids), port, primary_bot_id=primary)
+                            if n:
+                                st.success(f"✅ {n} posició(ns) importada(es) correctament.")
+                                _reconcile_cached.clear()
+                                _open_positions.clear()
+                                _trades.clear()
+                                st.rerun()
+                            else:
+                                st.info("Cap posició nova per importar.")
+                        except Exception as exc:
+                            st.error(f"Error en importar: {exc}")
 
 
 def _get_ibkr_port(bots_subset: pd.DataFrame, mode: str) -> int | None:
