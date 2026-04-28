@@ -559,6 +559,25 @@ def _render_risk_and_trades(
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
     with right:
+        # ── Pending orders banner (always shown, regardless of IBKR connection) ─
+        active_trades = (
+            trades_df[trades_df["bot_id"].isin(bots_subset["id"])]
+            if not trades_df.empty else trades_df
+        )
+        if not active_trades.empty and "estat" in active_trades.columns:
+            pending = active_trades[active_trades["estat"] == "pending"]
+            if not pending.empty:
+                lines = "  \n".join(
+                    f"• **{r['ticker']}** {int(r['quantitat'])} accions"
+                    f" — est. €{r['total_eur']:,.2f}"
+                    for _, r in pending.iterrows()
+                )
+                st.warning(
+                    f"⏳ **{len(pending)} ordre(s) pendent(s) a IBKR** "
+                    "(s'executarà quan el mercat obri — reconciliació automàtica demà)\n\n"
+                    + lines
+                )
+
         use_ibkr = ibkr_executions_df is not None and not ibkr_executions_df.empty
         if use_ibkr:
             st.markdown("**📋 Operacions IBKR (comissions reals)**")
@@ -582,25 +601,14 @@ def _render_risk_and_trades(
             }), use_container_width=True, hide_index=True)
         else:
             st.markdown("**📋 Registre d'operacions**")
-            active = (
-                trades_df[trades_df["bot_id"].isin(bots_subset["id"])]
-                if not trades_df.empty else trades_df
-            )
-            if active.empty:
+            if active_trades.empty:
                 st.caption("Encara no hi ha operacions.")
             else:
-                display = active.drop(columns=["bot_id"], errors="ignore").copy()
-                # Add a visual pending badge in the estat column
+                display = active_trades.drop(columns=["bot_id"], errors="ignore").copy()
                 if "estat" in display.columns:
-                    pending_mask = display["estat"] == "pending"
-                    if pending_mask.any():
-                        st.warning(
-                            f"⏳ **{pending_mask.sum()} ordre(s) pendent(s)** — enviada a IBKR, "
-                            "s'executarà quan el mercat obri. Es reconciliarà automàticament demà."
-                        )
                     display["estat"] = display["estat"].map(
                         {"filled": "✅ executat", "pending": "⏳ pendent", "cancelled": "❌ cancel·lat"}
-                    ).fillna("✅ executat")
+                    ).fillna("⚠️ desconegut")
                 st.dataframe(display, use_container_width=True, hide_index=True)
 
 
