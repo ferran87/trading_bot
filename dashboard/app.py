@@ -211,7 +211,8 @@ def _kpi_with_ibkr(
 
 
 def _combined_kpis(bots_subset: pd.DataFrame, kpis: dict[int, dict],
-                   initial_total: float) -> dict:
+                   initial_total: float,
+                   live_pnls: dict[int, dict] | None = None) -> dict:
     total    = sum(k["total_eur"]    for k in kpis.values())
     cash     = sum(k["cash_eur"]     for k in kpis.values())
     invested = sum(k["invested_eur"] for k in kpis.values())
@@ -219,11 +220,61 @@ def _combined_kpis(bots_subset: pd.DataFrame, kpis: dict[int, dict],
     trades   = sum(k["n_trades"]     for k in kpis.values())
     ret      = total / initial_total - 1.0 if initial_total else 0.0
     max_dd   = min(k["max_dd"] for k in kpis.values()) if kpis else 0.0
+    unrealized = sum(v["unrealized_pnl_eur"] for v in (live_pnls or {}).values())
+    total_pl   = total - initial_total
+    realized   = total_pl - unrealized
     return {
         "total_eur": total, "cash_eur": cash, "invested_eur": invested,
         "return_pct": ret, "max_dd": max_dd, "fees_eur": fees, "n_trades": trades,
         "sharpe": float("nan"),
+        "unrealized_pnl_eur": unrealized,
+        "realized_pnl_eur": realized,
     }
+
+
+def _compute_live_pnl_per_bot(
+    bots_subset: pd.DataFrame,
+    positions_df: pd.DataFrame,
+) -> dict[int, dict]:
+    """Compute live unrealized P&L and invested value per bot from current prices.
+
+    Uses yfinance end-of-day prices (same source as the positions table display).
+    Returns {bot_id: {"unrealized_pnl_eur": float, "live_invested_eur": float}}.
+    Falls back to cost-basis when a price is unavailable (unrealized stays 0).
+    """
+    result: dict[int, dict] = {
+        int(bot["id"]): {"unrealized_pnl_eur": 0.0, "live_invested_eur": 0.0}
+        for _, bot in bots_subset.iterrows()
+    }
+    if positions_df.empty:
+        return result
+
+    bot_ids = {int(b) for b in bots_subset["id"]}
+    active = positions_df[positions_df["bot_id"].isin(bot_ids)]
+    if active.empty:
+        return result
+
+    open_tickers = tuple(active["ticker"].unique())
+    live_prices  = _fetch_prices_eur(open_tickers)
+
+    for _, bot in bots_subset.iterrows():
+        bot_id  = int(bot["id"])
+        bot_pos = active[active["bot_id"] == bot_id]
+        unrealized   = 0.0
+        live_invested = 0.0
+        for _, p in bot_pos.iterrows():
+            px = live_prices.get(p["ticker"])
+            if px:
+                live_val      = px * p["quantitat"]
+                live_invested += live_val
+                unrealized    += live_val - p["cost_eur"]
+            else:
+                live_invested += p["cost_eur"]  # fallback: price unavailable
+        result[bot_id] = {
+            "unrealized_pnl_eur": unrealized,
+            "live_invested_eur":  live_invested,
+        }
+    return result
 
 
 # ── Render helpers ─────────────────────────────────────────────────────────────
@@ -288,33 +339,53 @@ def _render_strategy_selector(
 
 
 def _render_combined_header(bots_subset: pd.DataFrame, kpis: dict[int, dict],
-                            initial_total: float, floor: float, mode: str) -> None:
+                            initial_total: float, floor: float, mode: str,
+                            live_pnls: dict[int, dict] | None = None) -> None:
     if len(bots_subset) < 2:
         return
-    ck = _combined_kpis(bots_subset, kpis, initial_total)
-    ret_color = "normal" if ck["return_pct"] >= 0 else "inverse"
+    ck = _combined_kpis(bots_subset, kpis, initial_total, live_pnls)
+    total_pl   = ck["total_eur"] - initial_total
+    ret_color  = "normal" if ck["return_pct"] >= 0 else "inverse"
+    unrl_color = "normal" if ck["unrealized_pnl_eur"] >= 0 else "inverse"
+    rlzd_color = "normal" if ck["realized_pnl_eur"]   >= 0 else "inverse"
 
     with st.container(border=True):
         st.markdown("#### 🔀 Cartera combinada")
-        c1, c2, c3, c4, c5, c6 = st.columns(6)
-        c1.metric("Patrimoni total", f"€{ck['total_eur']:,.0f}",
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Patrimoni total",   f"€{ck['total_eur']:,.0f}",
                   f"{ck['return_pct']*100:+.2f}%", delta_color=ret_color)
-        c2.metric("Efectiu total",   f"€{ck['cash_eur']:,.0f}")
-        c3.metric("Invertit total",  f"€{ck['invested_eur']:,.0f}")
-        c4.metric("Guany / Pèrdua",  f"€{(ck['total_eur'] - initial_total):+,.0f}")
-        c5.metric("Max caiguda",     f"{ck['max_dd']*100:.1f}%")
-        c6.metric("Total operacions", ck["n_trades"])
+        c2.metric("Capital aportat",   f"€{initial_total:,.0f}")
+        c3.metric("Guany / Pèrdua",    f"€{total_pl:+,.0f}")
+        c4.metric("Comissions totals", f"€{ck['fees_eur']:,.2f}")
+
+        c5, c6, c7, c8 = st.columns(4)
+        unrl_pct = f"{ck['unrealized_pnl_eur'] / initial_total * 100:+.1f}%" if initial_total else "—"
+        rlzd_pct = f"{ck['realized_pnl_eur']   / initial_total * 100:+.1f}%" if initial_total else "—"
+        c5.metric("No realitzat",     f"€{ck['unrealized_pnl_eur']:+,.2f}",
+                  unrl_pct, delta_color=unrl_color)
+        c6.metric("Realitzat",        f"€{ck['realized_pnl_eur']:+,.2f}",
+                  rlzd_pct, delta_color=rlzd_color)
+        c7.metric("Màxima caiguda",   f"{ck['max_dd']*100:.1f}%")
+        c8.metric("Total operacions", ck["n_trades"])
         if ck["total_eur"] < floor * len(bots_subset):
             st.error("⚠ Patrimoni combinat per sota del mínim")
 
 
-def _render_bot_card(bot: pd.Series, kpi: dict, floor: float, mode: str) -> None:
+def _render_bot_card(bot: pd.Series, kpi: dict, floor: float, mode: str,
+                     live_pnl: dict | None = None) -> None:
     meta = _STRATEGY_META.get(bot["strategy"], {})
     emoji  = meta.get("emoji", "🤖")
     label  = meta.get("label", bot["strategy"])
     regime = meta.get("regime", "")
     icon   = _status_color(kpi["total_eur"], floor, mode)
     ret_color = "normal" if kpi["return_pct"] >= 0 else "inverse"
+
+    initial    = float(bot["initial_eur"])
+    unrealized = live_pnl["unrealized_pnl_eur"] if live_pnl else 0.0
+    total_pl   = kpi["total_eur"] - initial
+    realized   = total_pl - unrealized
+    unrl_color = "normal" if unrealized >= 0 else "inverse"
+    rlzd_color = "normal" if realized   >= 0 else "inverse"
 
     with st.container(border=True):
         h1, h2 = st.columns([3, 1])
@@ -324,17 +395,27 @@ def _render_bot_card(bot: pd.Series, kpi: dict, floor: float, mode: str) -> None
         st.caption(f"👤 {bot['owner']}  ·  *{regime}*")
         st.divider()
 
+        # Row 1 — portfolio summary
         c1, c2, c3 = st.columns(3)
         c1.metric("Patrimoni", f"€{kpi['total_eur']:,.2f}",
                   f"{kpi['return_pct']*100:+.2f}%", delta_color=ret_color)
         c2.metric("Efectiu",   f"€{kpi['cash_eur']:,.2f}")
         c3.metric("Invertit",  f"€{kpi['invested_eur']:,.2f}")
 
+        # Row 2 — P&L breakdown
         c4, c5, c6 = st.columns(3)
-        c4.metric("Sharpe (anual.)",
+        unrl_pct = f"{unrealized / initial * 100:+.1f}%" if initial else "—"
+        rlzd_pct = f"{realized   / initial * 100:+.1f}%" if initial else "—"
+        c4.metric("No realitzat", f"€{unrealized:+,.2f}", unrl_pct, delta_color=unrl_color)
+        c5.metric("Realitzat",    f"€{realized:+,.2f}",   rlzd_pct, delta_color=rlzd_color)
+        c6.metric("Comissions",   f"€{kpi['fees_eur']:,.2f}")
+
+        # Row 3 — risk metrics
+        c7, c8, c9 = st.columns(3)
+        c7.metric("Sharpe (anual.)",
                   "—" if pd.isna(kpi["sharpe"]) else f"{kpi['sharpe']:.2f}")
-        c5.metric("Màxima caiguda", f"{kpi['max_dd']*100:.1f}%")
-        c6.metric("Operacions", kpi["n_trades"])
+        c8.metric("Màxima caiguda", f"{kpi['max_dd']*100:.1f}%")
+        c9.metric("Operacions", kpi["n_trades"])
 
         if kpi["total_eur"] < floor:
             st.error(f"⚠ Per sota del mínim de cartera (€{floor:,.0f})")
@@ -747,9 +828,26 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
             n_active_bots=n_active,
         )
 
+    # ── Live P&L from current market prices (yfinance) ───────────────────────
+    live_pnls = _compute_live_pnl_per_bot(bots_subset, positions_df)
+
+    # In mock mode the KPI total comes from stale equity snapshots; replace it
+    # with cash (always current) + live market value of open positions so the
+    # card matches what the positions table shows.
+    if not use_ibkr:
+        for _, bot in bots_subset.iterrows():
+            bot_id = int(bot["id"])
+            lpnl = live_pnls.get(bot_id, {})
+            live_invested = lpnl.get("live_invested_eur", kpis[bot_id]["invested_eur"])
+            live_total    = kpis[bot_id]["cash_eur"] + live_invested
+            initial       = float(bot["initial_eur"])
+            kpis[bot_id]["invested_eur"] = live_invested
+            kpis[bot_id]["total_eur"]    = live_total
+            kpis[bot_id]["return_pct"]   = (live_total / initial - 1.0) if initial else 0.0
+
     initial_total = sum(float(bot["initial_eur"]) for _, bot in bots_subset.iterrows())
 
-    _render_combined_header(bots_subset, kpis, initial_total, floor, mode)
+    _render_combined_header(bots_subset, kpis, initial_total, floor, mode, live_pnls)
 
     if len(bots_subset) > 1:
         st.markdown("")
@@ -758,7 +856,8 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     cols = st.columns(len(bots_subset))
     for col, (_, bot) in zip(cols, bots_subset.iterrows()):
         with col:
-            _render_bot_card(bot, kpis[int(bot["id"])], floor, mode)
+            bot_id = int(bot["id"])
+            _render_bot_card(bot, kpis[bot_id], floor, mode, live_pnls.get(bot_id))
 
     st.divider()
 
