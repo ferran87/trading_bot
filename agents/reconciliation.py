@@ -408,6 +408,7 @@ def resolve_pending_orders(
             avg_cost_local = ibkr_avg_cost.get(local_sym)
             if avg_cost_local and avg_cost_local > 0:
                 from core import fx
+                from core.broker import estimate_fee_eur
                 ccy = entry.get("currency", "EUR")
                 fx_rate = fx.eur_per_unit(ccy)
                 trade.price = avg_cost_local
