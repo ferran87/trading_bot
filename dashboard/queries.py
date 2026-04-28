@@ -138,6 +138,22 @@ def _asset_names() -> dict[str, str]:
         "TSLA":    "Tesla Inc",
         "AMD":     "Advanced Micro Devices",
         "PLTR":    "Palantir Technologies",
+        # New US additions
+        "AVGO":    "Broadcom Inc",
+        "MU":      "Micron Technology",
+        "QCOM":    "Qualcomm",
+        "LLY":     "Eli Lilly & Co",
+        "COST":    "Costco Wholesale",
+        "BKNG":    "Booking Holdings",
+        "UBER":    "Uber Technologies",
+        "SHOP":    "Shopify Inc",
+        "CRM":     "Salesforce Inc",
+        "NOW":     "ServiceNow Inc",
+        # New EU additions
+        "IFX.DE":  "Infineon Technologies AG",
+        "RMS.PA":  "Hermès International",
+        "OR.PA":   "L'Oréal SA",
+        "RHM.DE":  "Rheinmetall AG",
         # Brand-name overrides (IBKR names have awkward casing / truncation)
         "MC.PA":   "LVMH Moët Hennessy",
         "SXR8.DE": "iShares Core S&P 500 UCITS",

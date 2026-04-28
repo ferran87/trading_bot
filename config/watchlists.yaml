@@ -40,12 +40,15 @@ etfs_ucits:
 # US equities — accessible to EU retail (stocks, not ETFs; PRIIPs doesn't apply).
 # Sector breakdown:
 #   Tech/Growth : AAPL MSFT GOOGL AMZN META NVDA
+#   Semiconductors: AVGO MU QCOM
 #   Financials  : JPM V BAC GS
-#   Healthcare  : UNH JNJ PFE
+#   Healthcare  : UNH JNJ PFE LLY
 #   Energy      : XOM CVX
 #   Industrials : CAT HON
-#   Cons Staples: PG KO WMT
-#   Cons Discr  : HD NKE DIS
+#   Cons Staples: PG KO WMT COST
+#   Cons Discr  : HD NKE DIS BKNG UBER
+#   Enterprise SW: CRM NOW
+#   E-commerce  : SHOP
 stocks_us:
   - AAPL
   - MSFT
@@ -53,6 +56,9 @@ stocks_us:
   - AMZN
   - META
   - NVDA
+  - AVGO      # Broadcom — semi, bot7+bot10
+  - MU        # Micron Technology — high-beta semi, bot7
+  - QCOM      # Qualcomm — semi, bot7
   - JPM
   - V
   - BAC
@@ -60,6 +66,7 @@ stocks_us:
   - UNH
   - JNJ
   - PFE
+  - LLY       # Eli Lilly — GLP-1 structural trend, bot10
   - XOM
   - CVX
   - CAT
@@ -67,16 +74,24 @@ stocks_us:
   - PG
   - KO
   - WMT
+  - COST      # Costco Wholesale — cleanest large-cap uptrend, bot10
   - HD
   - NKE
   - DIS
+  - BKNG      # Booking Holdings — high beta + clean trend, bot7+bot10
+  - UBER      # Uber Technologies — high beta, profitable since 2023, bot7
+  - SHOP      # Shopify — very high beta crash candidate, bot7
+  - CRM       # Salesforce — enterprise SaaS, bot7+bot10
+  - NOW       # ServiceNow — best SaaS trend geometry, bot7+bot10
 
 # EU equities. yfinance tickers; IBKR contract resolution confirms exchange.
 # Sector breakdown:
 #   Tech        : ASML.AS SAP.DE
-#   Luxury/Cons : MC.PA AIR.PA BMW.DE
+#   Semiconductors: IFX.DE
+#   Luxury/Cons : MC.PA RMS.PA AIR.PA BMW.DE OR.PA
 #   Staples     : NESN.SW
 #   Industrials : SIE.DE
+#   Defence     : RHM.DE
 #   Energy      : TTE.PA
 #   Healthcare  : NOVN.SW BAYN.DE
 #   Financials  : BNP.PA ALV.DE
@@ -85,7 +100,10 @@ stocks_us:
 stocks_eu:
   - ASML.AS        # ASML, Amsterdam
   - SAP.DE         # SAP, Xetra
+  - IFX.DE         # Infineon Technologies, Xetra — semi, bot7+bot10
   - MC.PA          # LVMH, Paris
+  - RMS.PA         # Hermès International, Paris — pristine uptrend, bot10
+  - OR.PA          # L'Oréal, Paris — secular consumer uptrend, bot10
   - NESN.SW        # Nestle, SIX Swiss (CHF)
   - SIE.DE         # Siemens, Xetra
   - AIR.PA         # Airbus, Paris
@@ -95,6 +113,7 @@ stocks_eu:
   - BMW.DE         # BMW, Xetra
   - ALV.DE         # Allianz, Xetra
   - BAYN.DE        # Bayer, Xetra
+  - RHM.DE         # Rheinmetall, Xetra — defence theme, bot10 only (caution: theme risk)
 
 # Crypto ETPs — resolved via IBKR contract details in Phase 3.
 crypto_etps:
@@ -154,3 +173,19 @@ venue:
   TSLA:    { class: stock,  venue: nasdaq_usd }
   AMD:     { class: stock,  venue: nasdaq_usd }
   PLTR:    { class: stock,  venue: nasdaq_usd }
+
+  AVGO:    { class: stock,  venue: nasdaq_usd }
+  MU:      { class: stock,  venue: nasdaq_usd }
+  QCOM:    { class: stock,  venue: nasdaq_usd }
+  LLY:     { class: stock,  venue: nyse_usd }
+  COST:    { class: stock,  venue: nasdaq_usd }
+  BKNG:    { class: stock,  venue: nasdaq_usd }
+  UBER:    { class: stock,  venue: nyse_usd }
+  SHOP:    { class: stock,  venue: nyse_usd }
+  CRM:     { class: stock,  venue: nyse_usd }
+  NOW:     { class: stock,  venue: nyse_usd }
+
+  IFX.DE:  { class: stock,  venue: xetra_eur }
+  RMS.PA:  { class: stock,  venue: xetra_eur }
+  OR.PA:   { class: stock,  venue: xetra_eur }
+  RHM.DE:  { class: stock,  venue: xetra_eur }
