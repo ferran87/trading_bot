@@ -36,46 +36,6 @@ def _load_bots() -> pd.DataFrame:
         )
 
 
-def _set_trading_mode(bot_id: int, mode: str) -> None:
-    """Toggle a bot between 'paper' and 'live' mode and clear the bots cache."""
-    with get_session() as s:
-        bot = s.query(Bot).filter(Bot.id == bot_id).one()
-        bot.trading_mode = mode
-        s.commit()
-    _load_bots.clear()
-
-
-def _set_bot_enabled(bot_id: int, enabled: bool) -> None:
-    """Enable or disable a bot (used for live trading toggle) and clear the bots cache."""
-    with get_session() as s:
-        bot = s.query(Bot).filter(Bot.id == bot_id).one()
-        bot.enabled = 1 if enabled else 0
-        s.commit()
-    _load_bots.clear()
-
-
-def _set_owner_active_strategies(
-    owner: str,
-    active_strategies: list[str],
-    *,
-    reset_live: bool = True,
-) -> None:
-    """Enable paper bots matching active_strategies, disable others for this owner.
-
-    If reset_live=True (default), all live bots for this owner are disabled so the
-    user must explicitly re-enable live trading after changing the strategy.
-    """
-    with get_session() as s:
-        bots = s.query(Bot).filter(Bot.owner == owner).all()
-        for bot in bots:
-            if bot.trading_mode == "paper":
-                bot.enabled = 1 if bot.strategy in active_strategies else 0
-            elif bot.trading_mode == "live" and reset_live:
-                bot.enabled = 0
-        s.commit()
-    _load_bots.clear()
-
-
 def _set_owner_mode_strategies(
     owner: str,
     mode: str,
@@ -351,13 +311,6 @@ def _ibkr_account_eur(port: int) -> dict[str, float] | None:
         return {"cash_eur": cash, "invested_eur": invested, "total_eur": total}
     except Exception:
         return None
-
-
-@st.cache_data(ttl=60)
-def _ibkr_cash_eur(port: int) -> float | None:
-    """Fetch TotalCashValue in EUR directly from IBKR Gateway. Returns None if unavailable."""
-    result = _ibkr_account_eur(port)
-    return result["cash_eur"] if result else None
 
 
 @st.cache_data(ttl=300)
