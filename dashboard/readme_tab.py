@@ -5,26 +5,95 @@ import streamlit as st
 
 
 # ── Sector labels ──────────────────────────────────────────────────────────────
+# Each entry: (ticker, full_name)
 
-_US_SECTORS: dict[str, list[str]] = {
-    "💻 Tecnologia / Creixement": ["AAPL", "MSFT", "GOOGL", "AMZN", "META", "NVDA"],
-    "🏦 Finances":                ["JPM", "V", "BAC", "GS"],
-    "🏥 Salut":                   ["UNH", "JNJ", "PFE"],
-    "⛽ Energia":                  ["XOM", "CVX"],
-    "🏗 Industrials":              ["CAT", "HON"],
-    "🛒 Consum bàsic":            ["PG", "KO", "WMT"],
-    "🛍 Consum discrecional":     ["HD", "NKE", "DIS"],
+_US_SECTORS: dict[str, list[tuple[str, str]]] = {
+    "💻 Tecnologia / Creixement": [
+        ("AAPL",  "Apple Inc"),
+        ("MSFT",  "Microsoft Corp"),
+        ("GOOGL", "Alphabet Inc"),
+        ("AMZN",  "Amazon.com Inc"),
+        ("META",  "Meta Platforms"),
+        ("NVDA",  "Nvidia Corp"),
+    ],
+    "🔌 Semiconductors": [
+        ("AVGO",  "Broadcom Inc"),
+        ("MU",    "Micron Technology"),
+        ("QCOM",  "Qualcomm"),
+    ],
+    "🏦 Finances": [
+        ("JPM",   "JPMorgan Chase & Co"),
+        ("V",     "Visa Inc"),
+        ("BAC",   "Bank of America Corp"),
+        ("GS",    "Goldman Sachs Group"),
+    ],
+    "🏥 Salut": [
+        ("UNH",   "UnitedHealth Group"),
+        ("JNJ",   "Johnson & Johnson"),
+        ("PFE",   "Pfizer Inc"),
+        ("LLY",   "Eli Lilly & Co"),
+    ],
+    "⛽ Energia": [
+        ("XOM",   "Exxon Mobil Corp"),
+        ("CVX",   "Chevron Corp"),
+    ],
+    "🏗 Industrials": [
+        ("CAT",   "Caterpillar Inc"),
+        ("HON",   "Honeywell International"),
+    ],
+    "🛒 Consum bàsic": [
+        ("PG",    "Procter & Gamble"),
+        ("KO",    "Coca-Cola Co"),
+        ("WMT",   "Walmart Inc"),
+        ("COST",  "Costco Wholesale"),
+    ],
+    "🛍 Consum discrecional": [
+        ("HD",    "Home Depot Inc"),
+        ("NKE",   "Nike Inc"),
+        ("DIS",   "Walt Disney Co"),
+        ("BKNG",  "Booking Holdings"),
+        ("UBER",  "Uber Technologies"),
+    ],
+    "💼 Enterprise Software": [
+        ("SHOP",  "Shopify Inc"),
+        ("CRM",   "Salesforce Inc"),
+        ("NOW",   "ServiceNow Inc"),
+    ],
 }
 
-_EU_SECTORS: dict[str, list[str]] = {
-    "💻 Tecnologia":              ["ASML.AS", "SAP.DE"],
-    "✈️ Aeroespacial / Luxe":    ["AIR.PA", "MC.PA"],
-    "⚙️ Industrials":            ["SIE.DE"],
-    "🏦 Finances":                ["BNP.PA", "ALV.DE"],
-    "🏥 Salut / Farmàcia":       ["NOVN.SW", "BAYN.DE"],
-    "🚗 Automòbil":              ["BMW.DE"],
-    "🛒 Consum bàsic":           ["NESN.SW"],
-    "⛽ Energia":                 ["TTE.PA"],
+_EU_SECTORS: dict[str, list[tuple[str, str]]] = {
+    "💻 Tecnologia / Semis": [
+        ("ASML.AS", "ASML Holding NV"),
+        ("SAP.DE",  "SAP SE"),
+        ("IFX.DE",  "Infineon Technologies AG"),
+    ],
+    "✈️ Aeroespacial / Luxe": [
+        ("AIR.PA",  "Airbus SE"),
+        ("MC.PA",   "LVMH Moët Hennessy"),
+        ("RMS.PA",  "Hermès International"),
+        ("OR.PA",   "L'Oréal SA"),
+    ],
+    "⚙️ Industrials / Defensa": [
+        ("SIE.DE",  "Siemens AG"),
+        ("RHM.DE",  "Rheinmetall AG"),
+    ],
+    "🏦 Finances": [
+        ("BNP.PA",  "BNP Paribas"),
+        ("ALV.DE",  "Allianz SE"),
+    ],
+    "🏥 Salut / Farmàcia": [
+        ("NOVN.SW", "Novartis AG"),
+        ("BAYN.DE", "Bayer AG"),
+    ],
+    "🚗 Automòbil": [
+        ("BMW.DE",  "BMW Group"),
+    ],
+    "🛒 Consum bàsic": [
+        ("NESN.SW", "Nestlé SA"),
+    ],
+    "⛽ Energia": [
+        ("TTE.PA",  "TotalEnergies SE"),
+    ],
 }
 
 _ETFS: list[tuple[str, str]] = [
@@ -113,20 +182,20 @@ mesurable per separat.
             "Accions americanes d'alta liquiditat. "
             "Operades en USD però reportades en EUR al dashboard."
         )
-        for sector, tickers in _US_SECTORS.items():
+        for sector, stocks in _US_SECTORS.items():
             cols = st.columns([2, 5])
             cols[0].markdown(f"**{sector}**")
-            cols[1].markdown("  ".join(f"`{t}`" for t in tickers))
+            cols[1].markdown("  ·  ".join(name for _, name in stocks))
 
     with tab_eu:
         st.caption(
             "Accions europees en diverses borses (Xetra, Euronext, SIX Swiss). "
             "La majoria en EUR; NESN.SW i NOVN.SW en CHF."
         )
-        for sector, tickers in _EU_SECTORS.items():
+        for sector, stocks in _EU_SECTORS.items():
             cols = st.columns([2, 5])
             cols[0].markdown(f"**{sector}**")
-            cols[1].markdown("  ".join(f"`{t}`" for t in tickers))
+            cols[1].markdown("  ·  ".join(name for _, name in stocks))
 
     with tab_etf:
         st.caption(
