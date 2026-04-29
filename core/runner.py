@@ -75,6 +75,7 @@ def run_bot(
     *,
     force_rebalance: bool = False,
     as_of: date | None = None,
+    trigger: str = "auto",
 ) -> executor.ExecutionReport | None:
     """Run one cycle for one bot. Returns the report, or None if the bot
     is disabled / its strategy isn't wired yet."""
@@ -160,6 +161,7 @@ def run_bot(
         n_sells=len(sells),
         n_rejected=len(report.rejected),
         summary=summary,
+        triggered_by=trigger,
     ))
 
     return report
@@ -268,6 +270,7 @@ def run_once(
     force_rebalance: bool = False,
     as_of: date | None = None,
     skip_bot_ids: frozenset[int] = frozenset(),
+    trigger: str = "auto",
 ) -> list[executor.ExecutionReport]:
     """Run one full cycle for every enabled bot.
 
@@ -305,6 +308,7 @@ def run_once(
                     today,
                     force_rebalance=force_rebalance,
                     as_of=as_of,
+                    trigger=trigger,
                 )
                 if r is not None:
                     reports.append(r)

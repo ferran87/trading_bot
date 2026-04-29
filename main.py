@@ -149,11 +149,13 @@ def main() -> int:
         args.force_rebalance,
     )
     try:
+        trigger = "auto" if args.auto else "manual"
         reports = run_once(
             today=today,
             force_rebalance=args.force_rebalance,
             as_of=as_of,
             skip_bot_ids=skip_bot_ids,
+            trigger=trigger,
         )
     except Exception as e:
         log.exception("fatal: %s", e)

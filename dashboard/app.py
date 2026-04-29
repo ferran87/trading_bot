@@ -703,7 +703,8 @@ def _render_run_logs(bots_subset: pd.DataFrame) -> None:
         st.info("Encara no hi ha execucions registrades.")
         return
 
-    display_cols = [c for c in active.columns if c not in ("bot_id", "explicació")]
+    display_cols = [c for c in active.columns if c not in ("bot_id", "explicació", "tipus")]
+    display_cols.insert(display_cols.index("data_execució") + 1, "tipus")
     st.dataframe(active[display_cols], use_container_width=True, hide_index=True)
 
     explanations = active[active["explicació"].str.len() > 0]

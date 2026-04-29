@@ -130,6 +130,7 @@ class RunLog(Base):
     n_rejected = Column(Integer, nullable=False, default=0)
     summary = Column(Text, nullable=False, default="")
     explanation = Column(Text, nullable=True, default=None)  # AI-generated plain-language summary
+    triggered_by = Column(Text, nullable=True, default="auto")   # "auto" | "manual"
 
 
 class CapitalAdjustment(Base):
