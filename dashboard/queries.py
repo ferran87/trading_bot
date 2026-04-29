@@ -276,10 +276,15 @@ def _closed_positions() -> pd.DataFrame:
     with get_session() as s:
         all_trades = (
             s.query(Trade)
-            .filter(Trade.status != "cancelled")
             .order_by(Trade.bot_id, Trade.ticker, Trade.timestamp)
             .all()
         )
+    # Filter cancelled trades in Python — avoids crashing on DB schemas where
+    # the status column was added by migration but may not exist on older envs.
+    all_trades = [
+        t for t in all_trades
+        if getattr(t, "status", "filled") != "cancelled"
+    ]
 
     from collections import defaultdict
 
