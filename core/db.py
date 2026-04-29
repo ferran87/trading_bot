@@ -166,6 +166,7 @@ def _migrate(eng) -> None:
     migrations = [
         "ALTER TABLE run_logs ADD COLUMN explanation TEXT",
         "ALTER TABLE trades ADD COLUMN status TEXT NOT NULL DEFAULT 'filled'",
+        "ALTER TABLE run_logs ADD COLUMN triggered_by TEXT DEFAULT 'auto'",
     ]
     with eng.connect() as conn:
         for sql in migrations:

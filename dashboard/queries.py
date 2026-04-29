@@ -285,7 +285,7 @@ def _run_logs(limit: int = 100) -> pd.DataFrame:
                     "bot": r.name,
                     "data_execució": r.RunLog.timestamp,
                     "data_mercat": r.RunLog.run_date,
-                    "tipus": "🕐 Auto" if (r.RunLog.triggered_by or "auto") == "auto" else "👤 Manual",
+                    "tipus": "🕐 Auto" if (getattr(r.RunLog, "triggered_by", None) or "auto") == "auto" else "👤 Manual",
                     "compres": r.RunLog.n_buys,
                     "vendes": r.RunLog.n_sells,
                     "rebutjades": r.RunLog.n_rejected,
