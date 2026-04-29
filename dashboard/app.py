@@ -22,6 +22,7 @@ from dashboard.backtest import render_backtest_tab  # noqa: E402
 from dashboard.readme_tab import render_readme_tab  # noqa: E402
 from dashboard.kpis import _kpis_for  # noqa: E402
 from dashboard.queries import (  # noqa: E402
+    _closed_positions,
     _equity_history,
     _fetch_prices_eur,
     _ibkr_account_eur,
@@ -876,6 +877,38 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
         bots_subset, positions_df, floor,
         ibkr_portfolio_df=ibkr_portfolio if use_ibkr else None,
     )
+
+    # ── Closed positions ──────────────────────────────────────────────────────
+    closed_df = _closed_positions()
+    bot_ids_in_scope = set(bots_subset["id"].tolist())
+    closed_subset = (
+        closed_df[closed_df["bot_id"].isin(bot_ids_in_scope)]
+        if not closed_df.empty else closed_df
+    )
+    display_cols = [c for c in closed_subset.columns if c != "bot_id"]
+
+    with st.expander(
+        f"📁 Posicions tancades ({len(closed_subset)} operacions)",
+        expanded=False,
+    ):
+        if closed_subset.empty:
+            st.caption("Encara no hi ha posicions tancades.")
+        else:
+            # Summary line: total realised P&L
+            total_pl_vals = []
+            for _, r in closed_subset.iterrows():
+                try:
+                    total_pl_vals.append(float(str(r["P&L €"]).replace("€", "").replace(",", "").replace("+", "")))
+                except ValueError:
+                    pass
+            total_pl = sum(total_pl_vals)
+            colour = "green" if total_pl >= 0 else "red"
+            st.markdown(
+                f"P&L realitzat total: "
+                f"<span style='color:{colour};font-weight:700'>€{total_pl:+,.2f}</span>",
+                unsafe_allow_html=True,
+            )
+            st.dataframe(closed_subset[display_cols], use_container_width=True, hide_index=True)
 
     st.divider()
 

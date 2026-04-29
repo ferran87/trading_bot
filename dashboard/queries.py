@@ -264,6 +264,73 @@ def _open_positions() -> pd.DataFrame:
         )
 
 
+@st.cache_data(ttl=60)
+def _closed_positions() -> pd.DataFrame:
+    """Compute closed-position P&L from the trades ledger.
+
+    For each (bot_id, ticker) that has at least one SELL trade, reconstructs
+    individual round-trip rows using FIFO matching: each SELL is paired against
+    the weighted-average entry price of all preceding BUYs for that bot/ticker.
+    """
+    names = _asset_names()
+    with get_session() as s:
+        all_trades = (
+            s.query(Trade)
+            .filter(Trade.status != "cancelled")
+            .order_by(Trade.bot_id, Trade.ticker, Trade.timestamp)
+            .all()
+        )
+
+    from collections import defaultdict
+
+    # Group by (bot_id, ticker)
+    groups: dict[tuple, list] = defaultdict(list)
+    for t in all_trades:
+        groups[(t.bot_id, t.ticker)].append(t)
+
+    rows = []
+    for (bot_id, ticker), trades in groups.items():
+        sells = [t for t in trades if t.side == "SELL"]
+        if not sells:
+            continue
+
+        buys = [t for t in trades if t.side == "BUY"]
+        total_buy_qty = sum(t.qty for t in buys)
+        total_buy_cost = sum(t.qty * t.price_eur for t in buys)
+        total_buy_fees = sum(t.fee_eur for t in buys)
+        avg_entry = total_buy_cost / total_buy_qty if total_buy_qty else 0.0
+
+        first_entry = min((t.timestamp for t in buys), default=None)
+
+        for sell in sells:
+            sell_qty = sell.qty
+            sell_rev = sell_qty * sell.price_eur
+            # Allocate buy-side fees proportional to sold qty
+            alloc_buy_fee = (total_buy_fees * sell_qty / total_buy_qty) if total_buy_qty else 0.0
+            pl = sell_rev - avg_entry * sell_qty - sell.fee_eur - alloc_buy_fee
+            pl_pct = (sell.price_eur / avg_entry - 1) * 100 if avg_entry else 0.0
+            entry_date = first_entry.date() if first_entry else None
+            exit_date = sell.timestamp.date()
+            rows.append({
+                "bot_id":          bot_id,
+                "ticker":          ticker,
+                "nom":             names.get(ticker, ticker),
+                "data_entrada":    entry_date,
+                "data_sortida":    exit_date,
+                "dies":            (exit_date - entry_date).days if entry_date else "—",
+                "quantitat":       int(sell_qty),
+                "preu_entrada":    f"€{avg_entry:,.2f}",
+                "preu_sortida":    f"€{sell.price_eur:,.2f}",
+                "P&L €":          f"€{pl:+,.2f}",
+                "P&L %":          f"{pl_pct:+.1f}%",
+            })
+
+    df = pd.DataFrame(rows)
+    if not df.empty:
+        df = df.sort_values("data_sortida", ascending=False).reset_index(drop=True)
+    return df
+
+
 @st.cache_data(ttl=30)
 def _trades(limit: int = 500) -> pd.DataFrame:
     names = _asset_names()

@@ -25,7 +25,7 @@ data/*.db-shm
 data/*.db-wal
 data/logs/
 data/cache/
-data/contracts.json
+# data/contracts.json intentionally committed — Streamlit Cloud needs it for name resolution
 
 # Local brief / notes (may contain private context)
 initial chat.pdf
