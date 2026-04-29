@@ -275,6 +275,9 @@ class IBKRBroker:
         ib_order = MarketOrder(action=action, totalQuantity=qty)
         ib_order.tif = "DAY"
         ib_order.outsideRth = False
+        # Required when the Gateway manages multiple sub-accounts (IBKR error 435).
+        if self._account:
+            ib_order.account = self._account
 
         log.info(
             "IBKRBroker: placing %s %.0f %s @MKT (%s/%s %s)",
@@ -312,15 +315,37 @@ class IBKRBroker:
             self._ib.waitOnUpdate(timeout=1.0)
             deadline -= 1.0
             if deadline <= 0:
+                current_status = trade.orderStatus.status
+                # "Submitted" means the order is live at IBKR but hasn't filled yet.
+                # This happens when the exchange is closed (e.g. EU orders at 08:30
+                # before 09:00 open, or US orders before 15:30 CEST).  Don't cancel —
+                # leave the order alive at IBKR and record a pending fill so the
+                # virtual book reserves the capital.  The reconciliation agent will
+                # update the actual fill price once the exchange opens.
+                if current_status == "Submitted":
+                    log.info(
+                        "IBKRBroker: %s still Submitted after %.0fs — market likely "
+                        "closed, recording as pending fill (order stays live at IBKR)",
+                        order.ticker, self._timeout,
+                    )
+                    return self._build_pending_fill(order, trade, entry)
                 log.warning(
                     "IBKRBroker: %s order still %s after %.0fs — canceling at broker",
-                    order.ticker, trade.orderStatus.status, self._timeout,
+                    order.ticker, current_status, self._timeout,
                 )
                 self._ib.cancelOrder(ib_order)
                 for _ in range(20):
                     self._ib.waitOnUpdate(timeout=0.5)
                     if trade.isDone():
                         break
+                # The order may have filled naturally during the cancel window
+                # (cancel is a no-op if IBKR already processed all fills).
+                if trade.orderStatus.status == "Filled":
+                    log.info(
+                        "IBKRBroker: %s filled during cancel window — recording fill",
+                        order.ticker,
+                    )
+                    break  # exit the while-not-done loop; _build_fill below
                 raise RuntimeError(
                     f"IBKRBroker: order for {order.ticker} did not fill within "
                     f"{self._timeout}s (last status={trade.orderStatus.status!r}). "
@@ -329,6 +354,22 @@ class IBKRBroker:
 
         status = trade.orderStatus.status
         if status != "Filled":
+            # "Cancelled" with 0 fills and 0 avg price means IBKR rejected the order
+            # before any exchange activity — most common cause is that the paper
+            # simulation cancelled a "Submitted" US-stock order because the exchange
+            # simulation is unavailable outside US RTH.  Treat as pending fill so
+            # the virtual book is consistent; the reconciliation agent corrects it.
+            if (
+                status in ("Cancelled", "ApiCancelled")
+                and trade.orderStatus.filled == 0
+                and trade.orderStatus.avgFillPrice == 0.0
+            ):
+                log.info(
+                    "IBKRBroker: %s cancelled by IBKR with 0 fills (exchange likely "
+                    "closed) — recording as pending fill",
+                    order.ticker,
+                )
+                return self._build_pending_fill(order, trade, entry)
             raise RuntimeError(
                 f"IBKRBroker: {order.ticker} ended with status={status!r} "
                 f"(avgFillPrice={trade.orderStatus.avgFillPrice})"

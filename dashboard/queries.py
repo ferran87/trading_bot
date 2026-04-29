@@ -154,6 +154,13 @@ def _asset_names() -> dict[str, str]:
         "RMS.PA":  "Hermès International",
         "OR.PA":   "L'Oréal SA",
         "RHM.DE":  "Rheinmetall AG",
+        "BNP.PA":  "BNP Paribas",
+        "AIR.PA":  "Airbus SE",
+        "ALV.DE":  "Allianz SE",
+        "BMW.DE":  "BMW Group",
+        "SAP.DE":  "SAP SE",
+        "SIE.DE":  "Siemens AG",
+        "BAYN.DE": "Bayer AG",
         # Brand-name overrides (IBKR names have awkward casing / truncation)
         "MC.PA":   "LVMH Moët Hennessy",
         "SXR8.DE": "iShares Core S&P 500 UCITS",
@@ -174,15 +181,31 @@ def _asset_names() -> dict[str, str]:
     }
 
     path = DATA_DIR / "contracts.json"
-    names: dict[str, str] = dict(_FALLBACK_NAMES)
+    names: dict[str, str] = {}
+    data: dict = {}
 
+    # Layer 1: auto-generate names from contracts.json (yf ticker + IBKR local symbol).
     if path.exists():
         data = json.loads(path.read_text(encoding="utf-8"))
         for ticker, entry in data.items():
             raw = entry.get("long_name") or ticker
-            # title() handles all-caps; special-case common abbreviations
             nice = _title_name(raw)
             names[ticker] = nice
+            # Also index by IBKR local symbol so that IBKR portfolio/executions
+            # tables (which use bare symbols like "AIR", "BNP", "TTE") resolve too.
+            ibkr_sym = entry.get("local_symbol") or entry.get("symbol")
+            if ibkr_sym and ibkr_sym not in names:
+                names[ibkr_sym] = nice
+
+    # Layer 2: apply hand-curated overrides — these WIN over auto-generated names.
+    # Also propagate each override to the corresponding IBKR local symbol so that
+    # IBKR-sourced tables use the same corrected name.
+    for yf_ticker, nice_name in _FALLBACK_NAMES.items():
+        names[yf_ticker] = nice_name
+        entry = data.get(yf_ticker, {})
+        ibkr_sym = entry.get("local_symbol") or entry.get("symbol")
+        if ibkr_sym:
+            names[ibkr_sym] = nice_name
 
     return names
 
