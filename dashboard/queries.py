@@ -425,9 +425,15 @@ def _ibkr_account_eur(port: int) -> dict[str, float] | None:
         return None
 
 
-@st.cache_data(ttl=300)
 def _fetch_prices_eur(tickers: tuple[str, ...]) -> dict[str, float]:
-    """Fetch end-of-day close prices in EUR for a list of tickers."""
+    """Fetch end-of-day close prices in EUR for a list of tickers.
+
+    Not decorated with @st.cache_data — market_data._CACHE already deduplicates
+    yfinance downloads within the process.  The st.cache_data layer caused
+    stale USD prices to persist across hot-reloads when only market_data.py
+    was edited (Streamlit reruns app.py but keeps imported modules in
+    sys.modules, so the cached wrong result kept being returned).
+    """
     from analysis import market_data
 
     bars = market_data.prefetch_since(list(tickers), 5)
