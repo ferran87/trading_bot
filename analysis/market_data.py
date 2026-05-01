@@ -154,11 +154,20 @@ def _venue_currency(ticker: str) -> str:
         return "EUR"
 
 
+# Rough fallback rates used only when yfinance FX fetch fails entirely.
+# Better to show a slightly wrong EUR price than raw USD/CHF.
+_FX_FALLBACK: dict[str, float] = {"USD": 0.88, "CHF": 0.95}
+
+
 def last_prices_eur(bars_by_ticker: dict[str, Bars]) -> dict[str, float]:
     """Return the latest close price for each ticker, converted to EUR.
 
     Reads the venue map from watchlists.yaml to determine each ticker's
     native currency, then applies an EOD yfinance FX rate for non-EUR tickers.
+
+    When the FX fetch fails (transient yfinance error) a hardcoded fallback
+    rate is applied rather than returning the raw foreign-currency price,
+    which would be silently cached and misread as EUR by the dashboard.
     """
     from core import fx
 
@@ -170,10 +179,12 @@ def last_prices_eur(bars_by_ticker: dict[str, Bars]) -> dict[str, float]:
             try:
                 close = fx.to_eur(close, ccy)
             except Exception as e:
+                fallback = _FX_FALLBACK.get(ccy, 1.0)
                 log.warning(
                     "market_data: FX conversion failed for %s (%s→EUR): %s; "
-                    "using raw price", ticker, ccy, e,
+                    "applying fallback rate %.4f", ticker, ccy, e, fallback,
                 )
+                close = close * fallback
         out[ticker] = close
     return out
 

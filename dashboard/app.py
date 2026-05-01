@@ -482,13 +482,17 @@ def _render_equity_chart(bots_subset: pd.DataFrame, equity_df: pd.DataFrame,
 
 
 def _eur_per_usd() -> float:
-    """Return today's EUR/USD rate (falls back to 0.90 if unavailable)."""
+    """Return EUR per 1 USD (e.g. ~0.853 when EUR/USD = 1.17).
+
+    Uses the same fx module as the bot so IBKR market-price conversion is
+    consistent with how trade prices are stored in the database.
+    Falls back to 0.88 if yfinance is temporarily unavailable.
+    """
     try:
-        from analysis import market_data
-        bars = market_data.fetch_bars("EURUSD=X", period="5d")
-        return float(bars.df["close"].dropna().iloc[-1])
+        from core import fx
+        return fx.eur_per_unit("USD")
     except Exception:
-        return 0.90
+        return 0.88
 
 
 def _native_to_eur(value: float, contract_currency: str, rate_eur_per_usd: float) -> float:
