@@ -966,6 +966,16 @@ with st.sidebar:
         st.caption(f"{active_icon} {emoji} {label} {mode_icon}")
 
     st.divider()
+    # ── Force price refresh ───────────────────────────────────────────────────
+    if st.button("🔄 Actualitza preus", help="Buida totes les caches de preus (yfinance + FX)"):
+        from analysis import market_data as _md
+        from core import fx as _fx
+        _md.clear_cache()
+        _fx.clear_cache()
+        st.cache_data.clear()
+        st.rerun()
+
+    st.divider()
     st.caption(
         f"Backend: `{CONFIG.broker_backend}` · "
         f"BD: `{CONFIG.db_path.name}`"
