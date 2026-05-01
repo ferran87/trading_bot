@@ -138,31 +138,52 @@ def run_bot(
     orders = strategy.propose_orders(snapshot, ctx)
     log.info("bot=%d proposed %d orders", bot.id, len(orders))
 
-    report = executor.run_orders(session, broker, bot.id, orders, snapshot, today)
+    # Execute orders — wrapped so RunLog is always written even on failure.
+    exec_error: Exception | None = None
+    report: executor.ExecutionReport | None = None
+    try:
+        report = executor.run_orders(session, broker, bot.id, orders, snapshot, today)
+    except Exception as exc:
+        exec_error = exc
+        log.warning("bot=%d executor raised: %s", bot.id, exc)
 
     # End-of-run equity snapshot (one per day — updates if called again same day).
-    Portfolio.record_equity_snapshot(session, bot.id, today, last_prices)
+    try:
+        Portfolio.record_equity_snapshot(session, bot.id, today, last_prices)
+    except Exception as snap_exc:
+        log.warning("bot=%d equity snapshot failed: %s", bot.id, snap_exc)
 
-    # Run log — one entry per bot per run, even when no trades fire.
-    buys  = [o.ticker for o, _ in report.approved if o.side.value == "BUY"]
-    sells = [o.ticker for o, _ in report.approved if o.side.value == "SELL"]
-    parts: list[str] = []
-    if buys:
-        parts.append("COMPRA: " + ", ".join(buys))
-    if sells:
-        parts.append("VENDA: " + ", ".join(sells))
-    if report.rejected:
-        parts.append(f"{len(report.rejected)} rebutjades")
-    summary = " | ".join(parts) if parts else "Cap acció"
+    # Run log — written unconditionally so the bot always appears in the dashboard.
+    if report is not None:
+        buys  = [o.ticker for o, _ in report.approved if o.side.value == "BUY"]
+        sells = [o.ticker for o, _ in report.approved if o.side.value == "SELL"]
+        parts: list[str] = []
+        if buys:
+            parts.append("COMPRA: " + ", ".join(buys))
+        if sells:
+            parts.append("VENDA: " + ", ".join(sells))
+        if report.rejected:
+            parts.append(f"{len(report.rejected)} rebutjades")
+        summary = " | ".join(parts) if parts else "Cap acció"
+        n_buys, n_sells, n_rej = len(buys), len(sells), len(report.rejected)
+    else:
+        # Executor failed before producing a report — record the error as summary.
+        summary = f"Error: {exec_error}"
+        n_buys, n_sells, n_rej = 0, 0, len(orders)
+
     session.add(RunLog(
         bot_id=bot.id,
         run_date=today,
-        n_buys=len(buys),
-        n_sells=len(sells),
-        n_rejected=len(report.rejected),
+        n_buys=n_buys,
+        n_sells=n_sells,
+        n_rejected=n_rej,
         summary=summary,
         triggered_by=trigger,
     ))
+
+    # Re-raise so run_once catches it, rolls back, and adds an ErrorLog.
+    if exec_error is not None:
+        raise exec_error
 
     return report
 
