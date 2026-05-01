@@ -968,6 +968,13 @@ with st.sidebar:
     st.divider()
     # ── Force price refresh ───────────────────────────────────────────────────
     if st.button("🔄 Actualitza preus", help="Buida totes les caches de preus (yfinance + FX)"):
+        import importlib
+        import sys
+        # Force-reload market_data and fx so any code fixes take effect
+        # even when Streamlit's hot-reload kept the old module in sys.modules.
+        for mod_name in ("analysis.market_data", "core.fx"):
+            if mod_name in sys.modules:
+                importlib.reload(sys.modules[mod_name])
         from analysis import market_data as _md
         from core import fx as _fx
         _md.clear_cache()
