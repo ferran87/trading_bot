@@ -362,19 +362,39 @@ def resolve_pending_orders(
         log.warning("resolve_pending_orders: cannot reach IBKR — will retry next run")
         return 0
 
-    # Fetch avgCost per symbol from a separate IBKR call (ib.portfolio())
+    # Fetch avgCost per symbol AND actual commissions from IBKR
     ibkr_avg_cost: dict[str, float] = {}
+    # commission_eur_by_sym: sum of all partial-fill commissions per local symbol
+    commission_eur_by_sym: dict[str, float] = {}
     try:
         from ib_async import IB
+        from core import fx as _fx
         ib = IB()
         ib.connect("127.0.0.1", ibkr_port, clientId=57, timeout=5)
         ib.sleep(1)
         for item in ib.portfolio():
             sym = item.contract.localSymbol or item.contract.symbol
             ibkr_avg_cost[sym] = float(item.averageCost)
+
+        # Sum actual commissions across all partial fills per symbol
+        _SENTINEL = 1.7976931348623157e+308
+        fills = ib.reqExecutions()
+        ib.sleep(1)
+        for fill in fills:
+            cr = getattr(fill, "commissionReport", None)
+            if cr is None or not cr.commission or cr.commission == _SENTINEL:
+                continue
+            sym = fill.contract.localSymbol or fill.contract.symbol
+            ccy = cr.currency or "USD"
+            try:
+                comm_eur = _fx.to_eur(float(cr.commission), ccy)
+            except Exception:
+                comm_eur = float(cr.commission) * 0.88  # fallback
+            commission_eur_by_sym[sym] = commission_eur_by_sym.get(sym, 0.0) + comm_eur
+
         ib.disconnect()
     except Exception as exc:
-        log.warning("resolve_pending_orders: could not fetch avgCost: %s", exc)
+        log.warning("resolve_pending_orders: could not fetch avgCost/commissions: %s", exc)
 
     resolved = 0
     with get_session() as s:
@@ -414,8 +434,21 @@ def resolve_pending_orders(
                 trade.price = avg_cost_local
                 trade.price_eur = avg_cost_local * fx_rate
                 trade.fx_rate = fx_rate
-                # Recalculate fee with actual price
-                trade.fee_eur = estimate_fee_eur(ticker, ibkr_qty, trade.price_eur)
+                # Use actual summed commission from IBKR fills; fall back to estimate
+                # only when no commission data was available (e.g. paper account lag).
+                actual_comm = commission_eur_by_sym.get(local_sym)
+                if actual_comm and actual_comm > 0:
+                    trade.fee_eur = actual_comm
+                    log.info(
+                        "resolve_pending_orders: %s actual commission=€%.4f (was estimate)",
+                        ticker, actual_comm,
+                    )
+                else:
+                    trade.fee_eur = estimate_fee_eur(ticker, ibkr_qty, trade.price_eur)
+                    log.debug(
+                        "resolve_pending_orders: %s no commission report — using estimate €%.4f",
+                        ticker, trade.fee_eur,
+                    )
 
             trade.qty = ibkr_qty
             trade.status = "filled"

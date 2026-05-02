@@ -488,9 +488,11 @@ def _ibkr_portfolio(port: int) -> pd.DataFrame:
 def _ibkr_executions(port: int) -> pd.DataFrame:
     """Fetch recent execution fills from IBKR with actual commissions charged.
 
-    Returns a DataFrame with columns:
-      time, ticker, side, qty, price, commission, comm_currency, realized_pnl
+    Returns a DataFrame with one row per partial fill and columns:
+      order_id, time, ticker, side, qty, price, commission, comm_currency, realized_pnl
 
+    order_id (IBKR permId) lets the display group partial fills of the same
+    logical order to show total qty and total commission.
     Commission and realized_pnl are None when IBKR hasn't confirmed them yet.
     Returns an empty DataFrame if the Gateway is unreachable.
     """
@@ -508,6 +510,7 @@ def _ibkr_executions(port: int) -> pd.DataFrame:
             comm = float(cr.commission) if cr and cr.commission != _IBKR_SENTINEL else None
             rpnl = float(cr.realizedPNL) if cr and cr.realizedPNL != _IBKR_SENTINEL else None
             rows.append({
+                "order_id":      fill.execution.permId or fill.execution.orderId,
                 "time":          fill.execution.time,
                 "ticker":        fill.contract.localSymbol or fill.contract.symbol,
                 "side":          fill.execution.side,

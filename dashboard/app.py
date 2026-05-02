@@ -668,23 +668,44 @@ def _render_risk_and_trades(
         if use_ibkr:
             st.markdown("**📋 Operacions IBKR (comissions reals)**")
             rate = _eur_per_usd()
-            display = ibkr_executions_df.copy()
-            # Convert commission to EUR where currency is USD
-            def _fmt_comm(row: pd.Series) -> str:
-                if row["commission"] is None:
-                    return "—"
-                ccy = row.get("comm_currency", "USD")
-                val = row["commission"] * rate if ccy == "USD" else row["commission"]
-                return f"€{val:.2f}"
+            df = ibkr_executions_df.copy()
 
-            display["comissió €"] = display.apply(_fmt_comm, axis=1)
-            display["P&L tancat"] = display["realized_pnl"].apply(
-                lambda v: f"€{v * rate:+.2f}" if v is not None else "—"
-            )
-            show_cols = ["time", "ticker", "side", "qty", "price", "comissió €", "P&L tancat"]
-            st.dataframe(display[show_cols].rename(columns={
-                "time": "hora", "side": "operació", "qty": "quantitat", "price": "preu"
-            }), use_container_width=True, hide_index=True)
+            # Convert commission to EUR per fill before aggregation
+            def _comm_eur(row: pd.Series) -> float | None:
+                if row["commission"] is None:
+                    return None
+                ccy = row.get("comm_currency") or "USD"
+                return row["commission"] * rate if ccy == "USD" else row["commission"]
+
+            df["comm_eur"] = df.apply(_comm_eur, axis=1)
+
+            # Aggregate partial fills into one row per order.
+            # Group by order_id (same logical order) → sum qty & commission,
+            # weighted-avg price, latest time.
+            agg_rows = []
+            group_col = "order_id" if "order_id" in df.columns else None
+            groups = df.groupby(group_col) if group_col and df[group_col].notna().any() \
+                else [(None, df)]
+            for _, grp in groups:
+                total_qty    = grp["qty"].sum()
+                wavg_price   = (grp["qty"] * grp["price"]).sum() / total_qty if total_qty else 0
+                total_comm   = grp["comm_eur"].sum() if grp["comm_eur"].notna().any() else None
+                rpnl_vals    = grp["realized_pnl"].dropna()
+                total_rpnl   = rpnl_vals.sum() if not rpnl_vals.empty else None
+                ccy          = grp["comm_currency"].dropna().iloc[0] if grp["comm_currency"].notna().any() else "USD"
+                agg_rows.append({
+                    "hora":       grp["time"].max(),
+                    "ticker":     grp["ticker"].iloc[0],
+                    "operació":   grp["side"].iloc[0],
+                    "quantitat":  int(total_qty),
+                    "preu":       round(wavg_price, 4),
+                    "comissió €": f"€{total_comm:.2f}" if total_comm is not None else "—",
+                    "P&L tancat": f"€{total_rpnl * rate:+.2f}" if total_rpnl is not None and ccy == "USD"
+                                  else (f"€{total_rpnl:+.2f}" if total_rpnl is not None else "—"),
+                })
+
+            agg_df = pd.DataFrame(agg_rows).sort_values("hora", ascending=False)
+            st.dataframe(agg_df, use_container_width=True, hide_index=True)
         else:
             st.markdown("**📋 Registre d'operacions**")
             if active_trades.empty:
