@@ -70,21 +70,29 @@ LIVE_URL = "https://live.trading212.com/api/v0"
 # T212 API helpers
 # ---------------------------------------------------------------------------
 
-def _api_key() -> str:
-    key = os.environ.get("T212_API_KEY", "").strip()
+def _credentials(demo: bool = True) -> tuple[str, str]:
+    suffix = "PAPER" if demo else "LIVE"
+    key = os.environ.get(f"T212_API_KEY_{suffix}", "").strip() or os.environ.get("T212_API_KEY", "").strip()
+    secret = os.environ.get(f"T212_API_SECRET_{suffix}", "").strip() or os.environ.get("T212_API_SECRET", "").strip()
     if not key:
+        raise SystemExit(f"ERROR: T212_API_KEY_{suffix} not set in .env")
+    if not secret:
         raise SystemExit(
-            "ERROR: T212_API_KEY not set in .env\n"
-            "Generate one from T212 → Settings → API (demo or live account)."
+            f"ERROR: T212_API_SECRET_{suffix} not set in .env\n"
+            "The secret is only shown once at key creation time. Delete the key in T212, "
+            "generate a new one, and save both the key AND secret."
         )
-    return key
+    return key, secret
 
 
-def _headers() -> dict:
-    return {"Authorization": _api_key()}
+def _headers(demo: bool = True) -> dict:
+    import base64
+    key, secret = _credentials(demo)
+    token = base64.b64encode(f"{key}:{secret}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
 
 
-def fetch_all_instruments(base_url: str) -> list[dict]:
+def fetch_all_instruments(base_url: str, demo: bool = True) -> list[dict]:
     """Paginate through GET /equity/metadata/instruments and return all entries."""
     import requests
 
@@ -97,7 +105,7 @@ def fetch_all_instruments(base_url: str) -> list[dict]:
         if cursor:
             params["cursor"] = cursor
         url = f"{base_url}/equity/metadata/instruments"
-        resp = requests.get(url, headers=_headers(), params=params, timeout=30)
+        resp = requests.get(url, headers=_headers(demo), params=params, timeout=30)
         resp.raise_for_status()
         batch: list[dict] = resp.json()
         if not batch:
@@ -247,7 +255,7 @@ def main(demo: bool = True) -> None:
     env = "DEMO" if demo else "LIVE"
     log.info("Fetching T212 instrument universe from %s (%s) ...", base_url, env)
 
-    instruments = fetch_all_instruments(base_url)
+    instruments = fetch_all_instruments(base_url, demo=demo)
     by_isin, by_symbol = build_lookups(instruments)
 
     tickers = _all_watchlist_tickers()

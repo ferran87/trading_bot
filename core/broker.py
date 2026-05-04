@@ -552,19 +552,36 @@ class Trading212Broker:
             else "https://live.trading212.com/api/v0"
         )
 
-    @property
-    def _api_key(self) -> str:
-        key = os.environ.get("T212_API_KEY", "").strip()
+    def _credentials(self) -> tuple[str, str]:
+        """Return (api_key, api_secret) for the current environment."""
+        suffix = "PAPER" if self._demo else "LIVE"
+        key = (
+            os.environ.get(f"T212_API_KEY_{suffix}", "").strip()
+            or os.environ.get("T212_API_KEY", "").strip()
+        )
+        secret = (
+            os.environ.get(f"T212_API_SECRET_{suffix}", "").strip()
+            or os.environ.get("T212_API_SECRET", "").strip()
+        )
         if not key:
             raise RuntimeError(
-                "T212_API_KEY not set in .env — cannot connect to Trading 212. "
-                "Generate one from T212 → Settings → API."
+                f"T212_API_KEY_{suffix} not set in .env — cannot connect to Trading 212. "
+                "Generate a key from T212 → Settings → API (Beta) and save both the key AND secret."
             )
-        return key
+        if not secret:
+            raise RuntimeError(
+                f"T212_API_SECRET_{suffix} not set in .env — the secret is shown only once "
+                "at key creation time. Delete the old key, generate a new one, and save both values."
+            )
+        return key, secret
 
     def _headers(self) -> dict[str, str]:
+        """Build HTTP Basic Auth header: base64(api_key:api_secret)."""
+        import base64
+        key, secret = self._credentials()
+        token = base64.b64encode(f"{key}:{secret}".encode()).decode()
         return {
-            "Authorization": self._api_key,
+            "Authorization": f"Basic {token}",
             "Content-Type": "application/json",
         }
 

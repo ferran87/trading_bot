@@ -52,8 +52,9 @@ def instruments_json(tmp_path, monkeypatch):
 
 @pytest.fixture
 def broker(instruments_json, monkeypatch):
-    """Return a Trading212Broker wired to demo mode with a fake API key."""
-    monkeypatch.setenv("T212_API_KEY", "test-key-123")
+    """Return a Trading212Broker wired to demo mode with fake credentials."""
+    monkeypatch.setenv("T212_API_KEY_PAPER", "test-key-123")
+    monkeypatch.setenv("T212_API_SECRET_PAPER", "test-secret-abc")
     monkeypatch.setenv("T212_DEMO", "1")
     b = Trading212Broker(demo=True)
     return b
@@ -91,10 +92,19 @@ class TestConnect:
             broker.connect()  # should not raise
 
     def test_connect_missing_key_raises(self, instruments_json, monkeypatch):
+        monkeypatch.delenv("T212_API_KEY_PAPER", raising=False)
         monkeypatch.delenv("T212_API_KEY", raising=False)
-        monkeypatch.setenv("T212_API_KEY", "")
+        monkeypatch.setenv("T212_API_SECRET_PAPER", "some-secret")
         b = Trading212Broker(demo=True)
-        with pytest.raises(RuntimeError, match="T212_API_KEY not set"):
+        with pytest.raises(RuntimeError, match="T212_API_KEY_PAPER not set"):
+            b.connect()
+
+    def test_connect_missing_secret_raises(self, instruments_json, monkeypatch):
+        monkeypatch.setenv("T212_API_KEY_PAPER", "some-key")
+        monkeypatch.delenv("T212_API_SECRET_PAPER", raising=False)
+        monkeypatch.delenv("T212_API_SECRET", raising=False)
+        b = Trading212Broker(demo=True)
+        with pytest.raises(RuntimeError, match="T212_API_SECRET_PAPER not set"):
             b.connect()
 
     def test_disconnect_is_noop(self, broker):
