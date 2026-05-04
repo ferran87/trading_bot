@@ -565,12 +565,12 @@ class Trading212Broker:
         )
         if not key:
             raise RuntimeError(
-                f"T212_API_KEY_{suffix} not set in .env — cannot connect to Trading 212. "
-                "Generate a key from T212 → Settings → API (Beta) and save both the key AND secret."
+                f"T212_API_KEY_{suffix} not set in .env -- cannot connect to Trading 212. "
+                "Generate a key from T212 -> Settings -> API (Beta) and save both the key AND secret."
             )
         if not secret:
             raise RuntimeError(
-                f"T212_API_SECRET_{suffix} not set in .env — the secret is shown only once "
+                f"T212_API_SECRET_{suffix} not set in .env -- the secret is shown only once "
                 "at key creation time. Delete the old key, generate a new one, and save both values."
             )
         return key, secret

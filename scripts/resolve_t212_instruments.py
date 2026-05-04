@@ -93,19 +93,26 @@ def _headers(demo: bool = True) -> dict:
 
 
 def fetch_all_instruments(base_url: str, demo: bool = True) -> list[dict]:
-    """Paginate through GET /equity/metadata/instruments and return all entries."""
+    """Fetch all instruments from GET /equity/metadata/instruments.
+
+    T212 returns all instruments in a single (large) response. Pagination
+    via cursor is only needed if the batch is exactly the documented page
+    size (50). In practice the full universe (~17k instruments) comes back
+    in one shot, so we stop after the first batch unless it is exactly 50.
+    """
     import requests
 
     instruments: list[dict] = []
     cursor: str | None = None
     page = 0
+    PAGE_SIZE = 50  # documented T212 page size; stop paginating if batch > this
 
     while True:
         params: dict = {}
         if cursor:
             params["cursor"] = cursor
         url = f"{base_url}/equity/metadata/instruments"
-        resp = requests.get(url, headers=_headers(demo), params=params, timeout=30)
+        resp = requests.get(url, headers=_headers(demo), params=params, timeout=60)
         resp.raise_for_status()
         batch: list[dict] = resp.json()
         if not batch:
@@ -113,12 +120,12 @@ def fetch_all_instruments(base_url: str, demo: bool = True) -> list[dict]:
         instruments.extend(batch)
         page += 1
         log.info("  page %d: %d instruments (total so far: %d)", page, len(batch), len(instruments))
-        # Cursor is the ticker of the last item in the batch.
-        cursor = batch[-1].get("ticker")
-        if len(batch) < 50:
-            # Last page.
+        # If we got more than the page size, this is the full universe in one
+        # response — no need to paginate further.
+        if len(batch) != PAGE_SIZE:
             break
-        time.sleep(0.2)  # be polite to the T212 API
+        cursor = batch[-1].get("ticker")
+        time.sleep(0.5)  # be polite; T212 rate-limits aggressively
 
     log.info("Fetched %d instruments total from T212.", len(instruments))
     return instruments
