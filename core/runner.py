@@ -138,6 +138,14 @@ def run_bot(
     orders = strategy.propose_orders(snapshot, ctx)
     log.info("bot=%d proposed %d orders", bot.id, len(orders))
 
+    # Connect to the broker NOW — market data is already downloaded so the
+    # ib_async asyncio event loop won't be running while yfinance makes its
+    # HTTP requests (which causes a silent hang on Windows ProactorEventLoop).
+    # Callers must NOT call broker.connect() before run_bot(); disconnect()
+    # is still handled by run_once()'s finally block (it's a safe no-op if
+    # connect was never called).
+    broker.connect()
+
     # Execute orders — wrapped so RunLog is always written even on failure.
     exec_error: Exception | None = None
     report: executor.ExecutionReport | None = None
@@ -321,7 +329,6 @@ def run_once(
                 continue
             broker = _broker_for_bot(bot.id, getattr(bot, "trading_mode", "paper"))
             try:
-                broker.connect()
                 r = run_bot(
                     session,
                     broker,

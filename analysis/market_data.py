@@ -70,6 +70,7 @@ def fetch_bars(
             auto_adjust=True,
             progress=False,
             threads=False,
+            timeout=60,
         )
         if df is None or df.empty:
             raise RuntimeError(f"yfinance returned no data for {ticker!r}")
