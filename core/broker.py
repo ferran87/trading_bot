@@ -605,11 +605,14 @@ class Trading212Broker:
         """Validate credentials by fetching account summary."""
         info = self._get("/equity/account/summary")
         cash = info.get("cash", {})
+        # Summary endpoint uses "availableToTrade"; cash endpoint uses "free".
+        free = float(cash.get("availableToTrade", cash.get("free", 0)))
+        currency = info.get("currency", cash.get("currencyCode", "EUR"))
         log.info(
             "Trading212Broker connected (%s): free_cash=%.2f %s",
             "DEMO" if self._demo else "LIVE",
-            float(cash.get("free", 0)),
-            cash.get("currencyCode", "EUR"),
+            free,
+            currency,
         )
 
     def disconnect(self) -> None:
