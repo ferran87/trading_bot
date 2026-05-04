@@ -218,6 +218,11 @@ def _broker_for_bot(bot_id: int, trading_mode: str = "paper") -> "BrokerInterfac
             )
         from core.broker import IBKRBroker
         return IBKRBroker(port=int(ibkr_port))
+    if backend == "t212":
+        from core.broker import Trading212Broker
+        # Demo mode for paper trading; live mode when trading_mode=="live"
+        demo = (trading_mode != "live")
+        return Trading212Broker(demo=demo)
     raise ValueError(f"Unknown BROKER_BACKEND={backend!r}")
 
 
@@ -313,7 +318,9 @@ def run_once(
     validate_run_dates(today, as_of)
 
     # ── Pre-run: resolve any pending orders from previous sessions ─────────────
-    # Only for IBKR backend; mock needs no reconciliation.
+    # Only for IBKR backend; mock and T212 use REST-based reconciliation
+    # (T212 orders fill synchronously, so there are no "pending" orders to
+    # resolve on startup).
     if CONFIG.broker_backend == "ibkr":
         _resolve_pending_orders_all_bots()
 

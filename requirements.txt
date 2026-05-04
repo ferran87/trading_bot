@@ -6,6 +6,7 @@
 # Python 3.12+ compatible. ib_insync (unmaintained since 2023) breaks on 3.14.
 ib_async>=2.0.0
 yfinance>=0.2.54
+requests>=2.32.0           # Trading 212 REST broker (also transitive dep of yfinance)
 
 # Core
 pandas>=2.3.0

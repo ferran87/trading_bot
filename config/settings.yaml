@@ -19,15 +19,28 @@ broker:
     reconnect_attempts: 3
 
 # Fee model used by risk.py's fee-aware skip AND by the executor to stamp
-# each recorded fill. Refined later with real IBKR fills.
+# each recorded fill. Refined later with real fills.
 fees:
   # Applied per *venue*. Keyed by ticker suffix / currency.
+  # Used when BROKER_BACKEND=mock or BROKER_BACKEND=ibkr.
   xetra_eur:       { per_trade_eur: 1.25, pct: 0.0005, min_eur: 1.25 }   # EU UCITS on Xetra
   lse_gbp:         { per_trade_eur: 3.00, pct: 0.0005, min_eur: 3.00 }   # LSE listings (GBP)
   nasdaq_usd:      { per_trade_eur: 1.00, pct: 0.0, min_eur: 1.00 }      # US (paper only until PRIIPs KID exists)
   nyse_usd:        { per_trade_eur: 1.00, pct: 0.0, min_eur: 1.00 }
   swiss_chf:       { per_trade_eur: 3.00, pct: 0.0005, min_eur: 3.00 }   # SIX Swiss (NESN, NOVN)
   crypto_etp_eur:  { per_trade_eur: 2.50, pct: 0.0010, min_eur: 2.50 }   # BTCE / ZETH on Xetra
+
+# Trading 212 fee model — used when BROKER_BACKEND=t212.
+# T212 charges zero commission on all trades, but applies a 0.15% FX
+# conversion fee on every trade in a currency other than the account's
+# base currency (EUR).  EUR-denominated venues are genuinely free.
+fees_t212:
+  xetra_eur:       { per_trade_eur: 0.0, pct: 0.0,    min_eur: 0.0 }   # EUR — no FX fee
+  lse_gbp:         { per_trade_eur: 0.0, pct: 0.0015, min_eur: 0.0 }   # GBP → EUR: 0.15%
+  nasdaq_usd:      { per_trade_eur: 0.0, pct: 0.0015, min_eur: 0.0 }   # USD → EUR: 0.15%
+  nyse_usd:        { per_trade_eur: 0.0, pct: 0.0015, min_eur: 0.0 }   # USD → EUR: 0.15%
+  swiss_chf:       { per_trade_eur: 0.0, pct: 0.0015, min_eur: 0.0 }   # CHF → EUR: 0.15%
+  crypto_etp_eur:  { per_trade_eur: 0.0, pct: 0.0,    min_eur: 0.0 }   # EUR — no FX fee
 
 # FX reference for dashboard reporting. yfinance pair codes.
 fx:
