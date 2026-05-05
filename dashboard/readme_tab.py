@@ -136,15 +136,15 @@ com identifiquem el tipus de mercat i com funciona cada bot.
     with col1:
         with st.container(border=True):
             st.markdown("**Broker**")
-            st.markdown("**Interactive Brokers (IBKR)**")
+            st.markdown("**Trading 212**")
             st.caption(
-                "Un dels brokers amb les comissions més baixes del món. "
-                "Accés directe a borses europees i americanes."
+                "Broker europeu sense comissions per a accions i ETFs. "
+                "Accés directe a borses europees i americanes via API REST."
             )
     with col2:
         with st.container(border=True):
             st.markdown("**Compte**")
-            st.markdown("**Paper Trading — $1.000.000**")
+            st.markdown("**Paper Trading — €50.000**")
             st.caption(
                 "Diners virtuals per validar les estratègies sense risc real. "
                 "Quan estiguem satisfets, podem passar al compte de diners reals."
@@ -155,13 +155,13 @@ com identifiquem el tipus de mercat i com funciona cada bot.
             st.markdown("**Automàtica · Diària**")
             st.caption(
                 "El bot s'executa cada dia laborable abans de l'obertura del mercat. "
-                "Les ordres es col·loquen automàticament via IBKR Gateway."
+                "Les ordres es col·loquen automàticament via Trading 212 API."
             )
 
     st.markdown("""
 **Com funciona el pressupost virtual?**
-El compte IBKR és compartit, però cada bot té el seu propi *pressupost virtual*
-de **$500.000** (50% del total cadascun). Cada bot gestiona el seu propi efectiu
+El compte Trading 212 és compartit, però cada bot té el seu propi *pressupost virtual*
+de **€25.000** (50% del total cadascun). Cada bot gestiona el seu propi efectiu
 i les seves pròpies posicions, de manera que el rendiment de cada estratègia és
 mesurable per separat.
 """)
@@ -440,9 +440,9 @@ Els resultats detallats dels backtests es poden consultar a la pestanya **📊 B
 
     with st.expander("Puc perdre diners reals?"):
         st.markdown("""
-**Ara mateix, no.** Estem operant amb un compte de *paper trading* (diners virtuals).
+**Ara mateix, no.** Estem operant amb el compte de *pràctica* de Trading 212 (diners virtuals).
 Tot funciona igual que un compte real, però les operacions no afecten diners reals.
-Quan tinguem confiança en els resultats, decidirem conjuntament si passem a compte real.
+Quan tinguem confiança en els resultats, decidirem conjuntament si passem al compte d'inversió real.
 """)
 
     with st.expander("Qui controla el bot? Puc aturar-lo?"):
@@ -452,17 +452,21 @@ El bot l'administra en Ferran. Qualsevol de vosaltres pot:
 - **Canviar l'estratègia** des de la pestanya Paper o En Viu (selector d'estratègia).
 - **Deshabilitar el trading en viu** des de l'interruptor de la pestanya En Viu.
 
-Si hi ha qualsevol problema, parleu-ho directament amb en Ferran.
+Les ordres es col·loquen directament al compte de Trading 212 via API. Si hi ha
+qualsevol problema, parleu-ho directament amb en Ferran.
 """)
 
     with st.expander("Com es calculen les comissions?"):
         st.markdown("""
-IBKR cobra comissions per cada operació executada. Per a accions europees
-(Xetra), la comissió és d'aproximadament **€1,25 per operació** + 0,05% del
-valor. Per a accions americanes, ~**$1,00** per operació.
+Trading 212 **no cobra comissions** per a accions i ETFs. El cost real ve de
+la conversió de divises quan operem accions americanes (en USD):
 
-Al dashboard, la pestanya de *Operacions IBKR* mostra les **comissions reals**
-carregades per IBKR per a cada transacció — no una estimació, sinó el cost real.
+- **Accions europees (EUR):** cost **0 €** per operació.
+- **Accions americanes (USD):** **0,15%** del valor de l'operació per la
+  conversió EUR → USD. Per exemple, una operació de €10.000 en AAPL costa ~€15.
+
+Al dashboard, les comissions mostrades reflecteixen aquesta taxa de conversió,
+extreta directament de la resposta de l'API de Trading 212.
 """)
 
     with st.expander("Amb quina freqüència opera el bot?"):

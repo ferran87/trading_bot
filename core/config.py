@@ -64,17 +64,27 @@ class Config:
         """Return the SQLAlchemy database URL.
 
         Priority:
-          1. DATABASE_URL env var (set on Streamlit Cloud and in .env for the bot)
-          2. Local SQLite fallback (development / offline)
+          1. DATABASE_URL_IBKR  — when BROKER_BACKEND=ibkr
+          2. DATABASE_URL_T212  — when BROKER_BACKEND=t212
+          3. DATABASE_URL       — generic fallback (legacy / Streamlit Cloud single-secret)
+          4. Local SQLite       — offline / development
 
         Supabase and some PaaS providers give a `postgres://` URL — SQLAlchemy
         requires `postgresql://`, so we normalise it automatically.
         """
-        url = os.getenv("DATABASE_URL")
-        if url:
-            if url.startswith("postgres://"):
-                url = url.replace("postgres://", "postgresql://", 1)
-            return url
+        backend = os.getenv("BROKER_BACKEND", "mock").lower()
+        candidates = []
+        if backend == "ibkr":
+            candidates.append(os.getenv("DATABASE_URL_IBKR"))
+        elif backend == "t212":
+            candidates.append(os.getenv("DATABASE_URL_T212"))
+        candidates.append(os.getenv("DATABASE_URL"))
+
+        for url in candidates:
+            if url:
+                if url.startswith("postgres://"):
+                    url = url.replace("postgres://", "postgresql://", 1)
+                return url
         return f"sqlite:///{self.db_path.as_posix()}"
 
 
