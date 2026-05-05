@@ -640,3 +640,98 @@ def _t212_portfolio(demo: bool) -> pd.DataFrame:
     except Exception as exc:
         log.warning("_t212_portfolio(demo=%s): %s", demo, exc)
         return pd.DataFrame()
+
+
+@st.cache_data(ttl=15)
+def _t212_open_orders(demo: bool) -> pd.DataFrame:
+    """Fetch open (NEW / PENDING_EXECUTION) orders from T212.
+
+    Returns DataFrame with columns:
+      order_id, ticker, operació, quantitat, estat, creat_at
+    Returns empty DataFrame on error or no open orders.
+    """
+    import requests
+    headers = _t212_headers(demo)
+    if not headers:
+        return pd.DataFrame()
+    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
+    try:
+        resp = requests.get(f"{base}/api/v0/equity/orders", headers=headers, timeout=10)
+        resp.raise_for_status()
+        orders = resp.json()
+        rows = []
+        for o in orders:
+            rows.append({
+                "order_id":  o.get("id"),
+                "ticker":    o.get("ticker", ""),
+                "operació":  o.get("side", "BUY"),
+                "quantitat": float(o.get("quantity", 0)),
+                "estat":     o.get("status", ""),
+                "creat_at":  (o.get("createdAt") or "")[:19].replace("T", " "),
+            })
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception as exc:
+        log.warning("_t212_open_orders(demo=%s): %s", demo, exc)
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=30)
+def _t212_order_history(demo: bool, limit: int = 50) -> pd.DataFrame:
+    """Fetch filled order history from T212 /equity/history/orders.
+
+    This is the source of truth for executed prices and fees.  T212 returns
+    a nested structure: each item has an ``order`` block and a ``fill`` block.
+    Fees are in ``fill.walletImpact.taxes``; when absent we estimate from the
+    difference between ``netValue`` and ``qty × price``.
+
+    Returns DataFrame with columns:
+      data, ticker, nom, operació, quantitat, preu_eur, total_eur,
+      comissió_eur, estat, order_id
+    """
+    import requests
+    headers = _t212_headers(demo)
+    if not headers:
+        return pd.DataFrame()
+    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
+    try:
+        resp = requests.get(
+            f"{base}/api/v0/equity/history/orders",
+            headers=headers, timeout=10,
+            params={"limit": limit},
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        rows = []
+        for item in items:
+            order  = item.get("order", {})
+            fill   = item.get("fill", {})
+            wallet = fill.get("walletImpact", {})
+            taxes  = wallet.get("taxes", [])
+
+            qty   = float(fill.get("quantity") or order.get("filledQuantity") or 0)
+            price = float(fill.get("price", 0))
+            net   = float(wallet.get("netValue", qty * price))
+            fx    = float(wallet.get("fxRate", 1) or 1)
+
+            # Fee: sum explicit taxes first; fall back to netValue difference
+            fee = sum(float(t.get("quantity") or t.get("value") or 0) for t in taxes)
+            if fee == 0 and abs(net - qty * price) > 0.001:
+                fee = abs(net - qty * price)
+
+            inst = order.get("instrument", {})
+            rows.append({
+                "data":         (fill.get("filledAt") or order.get("createdAt") or "")[:19].replace("T", " "),
+                "ticker":       order.get("ticker", ""),
+                "nom":          inst.get("name", order.get("ticker", "")),
+                "operació":     order.get("side", ""),
+                "quantitat":    qty,
+                "preu_eur":     round(price * (1 / fx if fx != 1 else 1), 4),
+                "total_eur":    round(net, 2),
+                "comissió_eur": round(fee, 4),
+                "estat":        order.get("status", ""),
+                "order_id":     order.get("id"),
+            })
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception as exc:
+        log.warning("_t212_order_history(demo=%s): %s", demo, exc)
+        return pd.DataFrame()

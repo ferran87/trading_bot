@@ -35,6 +35,8 @@ from dashboard.queries import (  # noqa: E402
     _set_owner_live_enabled,
     _set_owner_mode_strategies,
     _t212_account,
+    _t212_open_orders,
+    _t212_order_history,
     _t212_portfolio,
     _trades,
 )
@@ -642,6 +644,8 @@ def _render_risk_and_trades(
     bots_subset: pd.DataFrame,
     trades_df: pd.DataFrame,
     ibkr_executions_df: pd.DataFrame | None = None,
+    t212_open_orders_df: pd.DataFrame | None = None,
+    t212_history_df: pd.DataFrame | None = None,
 ) -> None:
     left, right = st.columns(2)
     with left:
@@ -660,78 +664,111 @@ def _render_risk_and_trades(
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
     with right:
-        # ── Pending orders banner (always shown, regardless of IBKR connection) ─
+        # ── T212 open orders banner ───────────────────────────────────────────
+        use_t212_orders = t212_open_orders_df is not None and not t212_open_orders_df.empty
+        if use_t212_orders:
+            lines = "  \n".join(
+                f"• **{r['ticker']}** {r['quantitat']:.0f} accions — {r['estat']}"
+                f"  _(creada {r['creat_at']})_"
+                for _, r in t212_open_orders_df.iterrows()
+            )
+            st.warning(
+                f"⏳ **{len(t212_open_orders_df)} ordre(s) pendent(s) a Trading 212** "
+                "(esperant obertura del mercat)\n\n" + lines
+            )
+        else:
+            # ── Pending orders banner from SQLite (IBKR or no live data) ─────
+            active_trades = (
+                trades_df[trades_df["bot_id"].isin(bots_subset["id"])]
+                if not trades_df.empty else trades_df
+            )
+            if not active_trades.empty and "estat" in active_trades.columns:
+                pending = active_trades[active_trades["estat"] == "pending"]
+                if not pending.empty:
+                    lines = "  \n".join(
+                        f"• **{r['ticker']}** {int(r['quantitat'])} accions"
+                        f" — est. €{r['total_eur']:,.2f}"
+                        for _, r in pending.iterrows()
+                    )
+                    broker_name = "IBKR" if ibkr_executions_df is not None else "broker"
+                    st.warning(
+                        f"⏳ **{len(pending)} ordre(s) pendent(s) a {broker_name}** "
+                        "(s'executarà quan el mercat obri)\n\n" + lines
+                    )
+
+    st.divider()
+
+    # ── T212 transaction history (source of truth) ────────────────────────────
+    use_t212_hist = t212_history_df is not None and not t212_history_df.empty
+    if use_t212_hist:
+        st.markdown("#### 📋 Historial d'operacions Trading 212 _(font de veritat)_")
+        st.caption("Preus, quantitats i comissions tal com han quedat registrats a Trading 212.")
+        disp = t212_history_df.copy()
+        disp["estat"] = disp["estat"].map(
+            {"FILLED": "✅ executat", "CANCELLED": "❌ cancel·lat",
+             "REJECTED": "🚫 rebutjat", "NEW": "⏳ pendent"}
+        ).fillna(disp["estat"])
+        disp["comissió_eur"] = disp["comissió_eur"].apply(
+            lambda x: f"€{x:.4f}" if x else "€0.0000"
+        )
+        st.dataframe(
+            disp.drop(columns=["order_id"], errors="ignore"),
+            use_container_width=True, hide_index=True,
+        )
+
+    # ── IBKR executions or SQLite fallback ────────────────────────────────────
+    use_ibkr = ibkr_executions_df is not None and not ibkr_executions_df.empty
+    if use_ibkr:
+        st.markdown("**📋 Operacions IBKR (comissions reals)**")
+        rate = _eur_per_usd()
+        df = ibkr_executions_df.copy()
+
+        def _comm_eur(row: pd.Series) -> float | None:
+            if row["commission"] is None:
+                return None
+            ccy = row.get("comm_currency") or "USD"
+            return row["commission"] * rate if ccy == "USD" else row["commission"]
+
+        df["comm_eur"] = df.apply(_comm_eur, axis=1)
+        agg_rows = []
+        group_col = "order_id" if "order_id" in df.columns else None
+        groups = df.groupby(group_col) if group_col and df[group_col].notna().any() \
+            else [(None, df)]
+        for _, grp in groups:
+            total_qty  = grp["qty"].sum()
+            wavg_price = (grp["qty"] * grp["price"]).sum() / total_qty if total_qty else 0
+            total_comm = grp["comm_eur"].sum() if grp["comm_eur"].notna().any() else None
+            rpnl_vals  = grp["realized_pnl"].dropna()
+            total_rpnl = rpnl_vals.sum() if not rpnl_vals.empty else None
+            ccy        = grp["comm_currency"].dropna().iloc[0] if grp["comm_currency"].notna().any() else "USD"
+            agg_rows.append({
+                "hora":       grp["time"].max(),
+                "ticker":     grp["ticker"].iloc[0],
+                "operació":   grp["side"].iloc[0],
+                "quantitat":  int(total_qty),
+                "preu":       round(wavg_price, 4),
+                "comissió €": f"€{total_comm:.2f}" if total_comm is not None else "—",
+                "P&L tancat": f"€{total_rpnl * rate:+.2f}" if total_rpnl is not None and ccy == "USD"
+                              else (f"€{total_rpnl:+.2f}" if total_rpnl is not None else "—"),
+            })
+        agg_df = pd.DataFrame(agg_rows).sort_values("hora", ascending=False)
+        st.dataframe(agg_df, use_container_width=True, hide_index=True)
+    elif not use_t212_hist:
+        # Only show SQLite log when there's no live broker data at all
         active_trades = (
             trades_df[trades_df["bot_id"].isin(bots_subset["id"])]
             if not trades_df.empty else trades_df
         )
-        if not active_trades.empty and "estat" in active_trades.columns:
-            pending = active_trades[active_trades["estat"] == "pending"]
-            if not pending.empty:
-                lines = "  \n".join(
-                    f"• **{r['ticker']}** {int(r['quantitat'])} accions"
-                    f" — est. €{r['total_eur']:,.2f}"
-                    for _, r in pending.iterrows()
-                )
-                st.warning(
-                    f"⏳ **{len(pending)} ordre(s) pendent(s) a IBKR** "
-                    "(s'executarà quan el mercat obri — reconciliació automàtica demà)\n\n"
-                    + lines
-                )
-
-        use_ibkr = ibkr_executions_df is not None and not ibkr_executions_df.empty
-        if use_ibkr:
-            st.markdown("**📋 Operacions IBKR (comissions reals)**")
-            rate = _eur_per_usd()
-            df = ibkr_executions_df.copy()
-
-            # Convert commission to EUR per fill before aggregation
-            def _comm_eur(row: pd.Series) -> float | None:
-                if row["commission"] is None:
-                    return None
-                ccy = row.get("comm_currency") or "USD"
-                return row["commission"] * rate if ccy == "USD" else row["commission"]
-
-            df["comm_eur"] = df.apply(_comm_eur, axis=1)
-
-            # Aggregate partial fills into one row per order.
-            # Group by order_id (same logical order) → sum qty & commission,
-            # weighted-avg price, latest time.
-            agg_rows = []
-            group_col = "order_id" if "order_id" in df.columns else None
-            groups = df.groupby(group_col) if group_col and df[group_col].notna().any() \
-                else [(None, df)]
-            for _, grp in groups:
-                total_qty    = grp["qty"].sum()
-                wavg_price   = (grp["qty"] * grp["price"]).sum() / total_qty if total_qty else 0
-                total_comm   = grp["comm_eur"].sum() if grp["comm_eur"].notna().any() else None
-                rpnl_vals    = grp["realized_pnl"].dropna()
-                total_rpnl   = rpnl_vals.sum() if not rpnl_vals.empty else None
-                ccy          = grp["comm_currency"].dropna().iloc[0] if grp["comm_currency"].notna().any() else "USD"
-                agg_rows.append({
-                    "hora":       grp["time"].max(),
-                    "ticker":     grp["ticker"].iloc[0],
-                    "operació":   grp["side"].iloc[0],
-                    "quantitat":  int(total_qty),
-                    "preu":       round(wavg_price, 4),
-                    "comissió €": f"€{total_comm:.2f}" if total_comm is not None else "—",
-                    "P&L tancat": f"€{total_rpnl * rate:+.2f}" if total_rpnl is not None and ccy == "USD"
-                                  else (f"€{total_rpnl:+.2f}" if total_rpnl is not None else "—"),
-                })
-
-            agg_df = pd.DataFrame(agg_rows).sort_values("hora", ascending=False)
-            st.dataframe(agg_df, use_container_width=True, hide_index=True)
+        st.markdown("**📋 Registre d'operacions (SQLite)**")
+        if active_trades.empty:
+            st.caption("Encara no hi ha operacions.")
         else:
-            st.markdown("**📋 Registre d'operacions**")
-            if active_trades.empty:
-                st.caption("Encara no hi ha operacions.")
-            else:
-                display = active_trades.drop(columns=["bot_id"], errors="ignore").copy()
-                if "estat" in display.columns:
-                    display["estat"] = display["estat"].map(
-                        {"filled": "✅ executat", "pending": "⏳ pendent", "cancelled": "❌ cancel·lat"}
-                    ).fillna("⚠️ desconegut")
-                st.dataframe(display, use_container_width=True, hide_index=True)
+            display = active_trades.drop(columns=["bot_id"], errors="ignore").copy()
+            if "estat" in display.columns:
+                display["estat"] = display["estat"].map(
+                    {"filled": "✅ executat", "pending": "⏳ pendent", "cancelled": "❌ cancel·lat"}
+                ).fillna("⚠️ desconegut")
+            st.dataframe(display, use_container_width=True, hide_index=True)
 
 
 def _render_run_logs(bots_subset: pd.DataFrame) -> None:
@@ -853,8 +890,10 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     ibkr_portfolio  = _ibkr_portfolio(ibkr_port)  if ibkr_port else pd.DataFrame()
     ibkr_executions = _ibkr_executions(ibkr_port) if ibkr_port else pd.DataFrame()
 
-    t212_demo      = (mode != "live")
-    t212_portfolio = _t212_portfolio(t212_demo) if use_t212 else pd.DataFrame()
+    t212_demo          = (mode != "live")
+    t212_portfolio     = _t212_portfolio(t212_demo)    if use_t212 else pd.DataFrame()
+    t212_open_orders   = _t212_open_orders(t212_demo)  if use_t212 else pd.DataFrame()
+    t212_order_history = _t212_order_history(t212_demo) if use_t212 else pd.DataFrame()
 
     # ── Strategy info expanders ───────────────────────────────────────────────
     seen: set[str] = set()
@@ -914,6 +953,18 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
 
     st.divider()
 
+    # ── T212 live account strip ───────────────────────────────────────────────
+    if use_t212:
+        t212_acc = _t212_account(t212_demo)
+        if t212_acc:
+            n_active = len(bots_subset)
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric("💰 Total compte T212", f"€{t212_acc['total_eur']:,.2f}")
+            c2.metric("🏦 Efectiu disponible", f"€{t212_acc['cash_eur']:,.2f}")
+            c3.metric("📊 Invertit", f"€{t212_acc['invested_eur']:,.2f}")
+            reserved = t212_acc["total_eur"] - t212_acc["cash_eur"] - t212_acc["invested_eur"]
+            c4.metric("⏳ Reservat per ordres", f"€{max(reserved, 0):,.2f}")
+
     st.markdown("#### 📂 Posicions obertes")
     if use_ibkr and not ibkr_portfolio.empty:
         st.caption("Font: IBKR Gateway (temps real) · Posicions del bot i manuals.")
@@ -922,7 +973,7 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     elif use_t212 and not t212_portfolio.empty:
         st.caption("Font: Trading 212 API (en viu) · Posicions del compte.")
     elif use_t212:
-        st.caption("Font: SQLite (compte T212 buit o sense connexio).")
+        st.caption("Font: SQLite · compte T212 (el portfolio endpoint no és disponible en mode demo).")
     _render_positions(
         bots_subset, positions_df, floor,
         ibkr_portfolio_df=ibkr_portfolio if use_ibkr else None,
@@ -965,6 +1016,8 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     _render_risk_and_trades(
         bots_subset, trades_df,
         ibkr_executions_df=ibkr_executions if use_ibkr else None,
+        t212_open_orders_df=t212_open_orders if use_t212 else None,
+        t212_history_df=t212_order_history if use_t212 else None,
     )
 
     st.divider()
@@ -1013,7 +1066,17 @@ with st.sidebar:
 
     st.divider()
     # ── Force price refresh ───────────────────────────────────────────────────
-    if st.button("🔄 Actualitza preus", help="Buida totes les caches de preus (yfinance + FX)"):
+    btn_label = (
+        "🔄 Actualitza T212 + preus"
+        if CONFIG.broker_backend == "t212"
+        else "🔄 Actualitza preus"
+    )
+    btn_help = (
+        "Buida totes les caches · Obté l'últim estat del compte Trading 212 (posicions, ordres, historial)"
+        if CONFIG.broker_backend == "t212"
+        else "Buida totes les caches de preus (yfinance + FX)"
+    )
+    if st.button(btn_label, help=btn_help):
         import importlib
         import sys
         # Force-reload market_data and fx so any code fixes take effect
@@ -1025,7 +1088,7 @@ with st.sidebar:
         from core import fx as _fx
         _md.clear_cache()
         _fx.clear_cache()
-        st.cache_data.clear()
+        st.cache_data.clear()   # clears T212 caches too (_t212_account, _t212_portfolio, etc.)
         st.rerun()
 
     st.divider()
