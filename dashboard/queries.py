@@ -566,6 +566,40 @@ def _t212_headers(demo: bool) -> dict | None:
     return {"Authorization": f"Basic {token}"}
 
 
+@st.cache_data(ttl=300)
+def _t212_total_deposited(demo: bool) -> float:
+    """Return the net EUR deposited into the T212 account (deposits − withdrawals).
+
+    Paginates through the full transaction history.  TTL=300s (5 min) because
+    deposits are rare — no need to hit the API on every page refresh.
+    Returns 0.0 if credentials are missing or the API is unreachable.
+    """
+    import requests
+    headers = _t212_headers(demo)
+    if not headers:
+        return 0.0
+    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
+    deposited = 0.0
+    url: str | None = f"{base}/api/v0/history/transactions"
+    try:
+        while url:
+            resp = requests.get(url, headers=headers, timeout=10, params={"limit": 50})
+            resp.raise_for_status()
+            data = resp.json()
+            for tx in data.get("items", []):
+                tx_type = tx.get("type", "").upper()
+                amount  = float(tx.get("amount", 0))
+                if tx_type == "DEPOSIT":
+                    deposited += amount
+                elif tx_type == "WITHDRAWAL":
+                    deposited -= amount
+            next_path = data.get("nextPagePath")
+            url = f"{base}{next_path}" if next_path else None
+    except Exception as exc:
+        log.warning("_t212_total_deposited(demo=%s): %s", demo, exc)
+    return deposited
+
+
 @st.cache_data(ttl=60)
 def _t212_account(demo: bool) -> dict[str, float] | None:
     """Fetch cash and total equity from T212 /equity/account/summary.

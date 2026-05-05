@@ -618,6 +618,34 @@ class Trading212Broker:
         currency = info.get("currency", cash_block.get("currencyCode", "EUR"))
         return {"cash_eur": free, "total_eur": total, "currency": currency}
 
+    def _fetch_total_deposited(self) -> float:
+        """Return net EUR deposited into this T212 account (deposits − withdrawals).
+
+        Paginates through the full transaction history so additional deposits made
+        after the bot started are automatically picked up.  This is the correct
+        baseline for calculating investment returns — not the current account value
+        which already includes unrealised P&L.
+
+        Transaction types seen in the wild: DEPOSIT, WITHDRAWAL.
+        Any other type (dividends, interest, etc.) is ignored so the figure
+        reflects only capital the user explicitly put in.
+        """
+        deposited = 0.0
+        path: str | None = "/history/transactions"
+        while path:
+            data = self._get(path, params={"limit": 50} if "?" not in path else None)
+            items = data.get("items", data) if isinstance(data, dict) else data
+            for tx in items:
+                tx_type = tx.get("type", "").upper()
+                amount  = float(tx.get("amount", 0))
+                if tx_type == "DEPOSIT":
+                    deposited += amount
+                elif tx_type == "WITHDRAWAL":
+                    deposited -= amount
+            next_path = data.get("nextPagePath") if isinstance(data, dict) else None
+            path = next_path  # None → loop exits
+        return deposited
+
     def connect(self) -> None:
         """Validate credentials by fetching account summary."""
         acct = self._fetch_account()

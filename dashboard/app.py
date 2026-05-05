@@ -38,6 +38,7 @@ from dashboard.queries import (  # noqa: E402
     _t212_open_orders,
     _t212_order_history,
     _t212_portfolio,
+    _t212_total_deposited,
     _trades,
 )
 
@@ -182,13 +183,18 @@ def _kpi_with_ibkr(
 
     if use_t212:
         demo = (mode != "live")
-        t212_acc = _t212_account(demo)
+        t212_acc       = _t212_account(demo)
+        t212_deposited = _t212_total_deposited(demo)
         if t212_acc:
-            total_t212 = t212_acc["total_eur"]
-            bot_share  = total_t212 / max(n_active_bots, 1)
+            total_t212    = t212_acc["total_eur"]
+            bot_share     = total_t212 / max(n_active_bots, 1)
+            # Use deposited-per-bot as the return baseline; fall back to
+            # bot["initial_eur"] if no deposit transactions exist yet.
+            deposit_share = (t212_deposited / max(n_active_bots, 1)
+                             if t212_deposited > 0 else float(bot["initial_eur"]))
             kpi["total_eur"]  = bot_share
             kpi["cash_eur"]   = max(bot_share - kpi["invested_eur"], 0.0)
-            kpi["return_pct"] = bot_share / float(bot["initial_eur"]) - 1.0 if bot["initial_eur"] else 0.0
+            kpi["return_pct"] = (bot_share / deposit_share - 1.0) if deposit_share else 0.0
         return kpi
 
     if not use_ibkr:
@@ -955,15 +961,22 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
 
     # ── T212 live account strip ───────────────────────────────────────────────
     if use_t212:
-        t212_acc = _t212_account(t212_demo)
+        t212_acc       = _t212_account(t212_demo)
+        t212_deposited = _t212_total_deposited(t212_demo)
         if t212_acc:
-            n_active = len(bots_subset)
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("💰 Total compte T212", f"€{t212_acc['total_eur']:,.2f}")
-            c2.metric("🏦 Efectiu disponible", f"€{t212_acc['cash_eur']:,.2f}")
-            c3.metric("📊 Invertit", f"€{t212_acc['invested_eur']:,.2f}")
-            reserved = t212_acc["total_eur"] - t212_acc["cash_eur"] - t212_acc["invested_eur"]
-            c4.metric("⏳ Reservat per ordres", f"€{max(reserved, 0):,.2f}")
+            total    = t212_acc["total_eur"]
+            pnl_eur  = total - t212_deposited if t212_deposited > 0 else 0.0
+            pnl_pct  = pnl_eur / t212_deposited * 100 if t212_deposited > 0 else 0.0
+            pnl_str  = f"{pnl_pct:+.2f}%"
+            reserved = max(total - t212_acc["cash_eur"] - t212_acc["invested_eur"], 0.0)
+
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("💰 Total compte T212",  f"€{total:,.2f}")
+            c2.metric("📥 Capital dipositat",  f"€{t212_deposited:,.2f}" if t212_deposited else "—")
+            c3.metric("📈 P&L vs dipòsit",     f"€{pnl_eur:+,.2f}", pnl_str,
+                      delta_color="normal" if pnl_eur >= 0 else "inverse")
+            c4.metric("🏦 Efectiu disponible", f"€{t212_acc['cash_eur']:,.2f}")
+            c5.metric("⏳ Reservat per ordres", f"€{reserved:,.2f}")
 
     st.markdown("#### 📂 Posicions obertes")
     if use_ibkr and not ibkr_portfolio.empty:

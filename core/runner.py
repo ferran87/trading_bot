@@ -299,16 +299,21 @@ def _resolve_pending_orders_all_bots() -> None:
 
 
 def _sync_t212_initial_capital(today: date) -> None:
-    """Fetch the live T212 account balance and distribute it equally among
-    enabled bots that have not yet traded (initial_capital_eur is still the
-    settings.yaml default, or the account value changed).
+    """Sync initial_capital_eur for all enabled T212 bots from the account's
+    net deposited amount (deposits − withdrawals), split equally per mode.
 
-    This runs once per day at the start of run_once() when BROKER_BACKEND=t212,
-    replacing the hardcoded initial_capital_eur in settings.yaml with the real
-    account value split across active bots.  Bots that already have trades are
-    left untouched — their virtual book tracks from their first fill.
+    Why deposited amount and not current account value:
+      - Current value includes unrealised P&L → return % would always read 0 %
+        on a fresh run after a good day.
+      - Deposits represent actual capital committed by the user.
+      - When the user adds more funds, initial_capital_eur updates automatically
+        so the return baseline is always "what you put in".
+
+    This runs once per day at the start of run_once() when BROKER_BACKEND=t212.
+    All enabled bots are updated unconditionally — not just ones with 0 trades —
+    so new deposits are reflected immediately.
     """
-    from core.db import Trade, get_session
+    from core.db import get_session
 
     try:
         from core.broker import Trading212Broker
@@ -316,25 +321,24 @@ def _sync_t212_initial_capital(today: date) -> None:
         with get_session() as session:
             all_bots = session.query(Bot).order_by(Bot.id).all()
 
-            # Group enabled bots by trading_mode so paper and live accounts
-            # are sized independently.
             for mode in ("paper", "live"):
                 demo = (mode == "paper")
                 broker = Trading212Broker(demo=demo)
                 try:
-                    acct = broker._fetch_account()
+                    deposited_eur = broker._fetch_total_deposited()
                 except Exception as exc:
                     log.warning(
-                        "_sync_t212_initial_capital: could not fetch T212 %s balance: %s",
+                        "_sync_t212_initial_capital: could not fetch T212 %s "
+                        "transaction history: %s",
                         mode, exc,
                     )
                     continue
 
-                total_eur = acct.get("total_eur", 0.0)
-                if total_eur <= 0:
+                if deposited_eur <= 0:
                     log.warning(
-                        "_sync_t212_initial_capital: T212 %s balance is %.2f — skipping",
-                        mode, total_eur,
+                        "_sync_t212_initial_capital: T212 %s net deposited is %.2f "
+                        "— skipping (no deposit transactions yet?)",
+                        mode, deposited_eur,
                     )
                     continue
 
@@ -346,18 +350,17 @@ def _sync_t212_initial_capital(today: date) -> None:
                 if n == 0:
                     continue
 
-                per_bot_eur = round(total_eur / n, 2)
+                per_bot_eur = round(deposited_eur / n, 2)
 
                 for b in enabled_bots:
-                    trade_count = (
-                        session.query(Trade).filter(Trade.bot_id == b.id).count()
-                    )
-                    if trade_count == 0 and abs(b.initial_capital_eur - per_bot_eur) > 1.0:
+                    if abs(b.initial_capital_eur - per_bot_eur) > 0.01:
                         log.info(
                             "_sync_t212_initial_capital: bot=%d %s mode=%s "
-                            "initial_capital_eur %.2f -> %.2f (T212 total=%.2f / %d bots)",
+                            "initial_capital_eur %.2f -> %.2f "
+                            "(deposited=%.2f / %d bots)",
                             b.id, b.name, mode,
-                            b.initial_capital_eur, per_bot_eur, total_eur, n,
+                            b.initial_capital_eur, per_bot_eur,
+                            deposited_eur, n,
                         )
                         b.initial_capital_eur = per_bot_eur
 
