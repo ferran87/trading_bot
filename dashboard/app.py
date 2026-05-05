@@ -186,15 +186,18 @@ def _kpi_with_ibkr(
         t212_acc       = _t212_account(demo)
         t212_deposited = _t212_total_deposited(demo)
         if t212_acc:
-            total_t212    = t212_acc["total_eur"]
-            bot_share     = total_t212 / max(n_active_bots, 1)
-            # Use deposited-per-bot as the return baseline; fall back to
-            # bot["initial_eur"] if no deposit transactions exist yet.
-            deposit_share = (t212_deposited / max(n_active_bots, 1)
-                             if t212_deposited > 0 else float(bot["initial_eur"]))
-            kpi["total_eur"]  = bot_share
-            kpi["cash_eur"]   = max(bot_share - kpi["invested_eur"], 0.0)
-            kpi["return_pct"] = (bot_share / deposit_share - 1.0) if deposit_share else 0.0
+            n      = max(n_active_bots, 1)
+            total  = t212_acc["total_eur"]
+            deposit_share = (t212_deposited / n if t212_deposited > 0
+                             else float(bot["initial_eur"]))
+            kpi["total_eur"]         = total / n
+            kpi["cash_eur"]          = t212_acc["cash_eur"] / n
+            kpi["invested_eur"]      = t212_acc["invested_eur"] / n
+            # Use T212's own realized/unrealized — avoids mixing T212 OTC
+            # prices with yfinance exchange prices which creates phantom P&L.
+            kpi["realized_pnl_eur"]  = t212_acc["realized_pnl_eur"] / n
+            kpi["unrealized_pnl_eur"] = t212_acc["unrealized_pnl_eur"] / n
+            kpi["return_pct"]        = (total / n / deposit_share - 1.0) if deposit_share else 0.0
         return kpi
 
     if not use_ibkr:
@@ -244,9 +247,14 @@ def _combined_kpis(bots_subset: pd.DataFrame, kpis: dict[int, dict],
     trades   = sum(k["n_trades"]     for k in kpis.values())
     ret      = total / initial_total - 1.0 if initial_total else 0.0
     max_dd   = min(k["max_dd"] for k in kpis.values()) if kpis else 0.0
-    unrealized = sum(v["unrealized_pnl_eur"] for v in (live_pnls or {}).values())
-    total_pl   = total - initial_total
-    realized   = total_pl - unrealized
+    # For T212: use the broker's own figures already stored in each bot's kpi
+    # to avoid phantom P&L from mixing T212 OTC prices with yfinance prices.
+    if CONFIG.broker_backend == "t212" and all("realized_pnl_eur" in k for k in kpis.values()):
+        unrealized = sum(k["unrealized_pnl_eur"] for k in kpis.values())
+        realized   = sum(k["realized_pnl_eur"]   for k in kpis.values())
+    else:
+        unrealized = sum(v["unrealized_pnl_eur"] for v in (live_pnls or {}).values())
+        realized   = (total - initial_total) - unrealized
     return {
         "total_eur": total, "cash_eur": cash, "invested_eur": invested,
         "return_pct": ret, "max_dd": max_dd, "fees_eur": fees, "n_trades": trades,
@@ -404,10 +412,17 @@ def _render_bot_card(bot: pd.Series, kpi: dict, floor: float, mode: str,
     icon   = _status_color(kpi["total_eur"], floor, mode)
     ret_color = "normal" if kpi["return_pct"] >= 0 else "inverse"
 
-    initial    = float(bot["initial_eur"])
-    unrealized = live_pnl["unrealized_pnl_eur"] if live_pnl else 0.0
-    total_pl   = kpi["total_eur"] - initial
-    realized   = total_pl - unrealized
+    initial = float(bot["initial_eur"])
+    # For T212: use the broker's own realized/unrealized figures (already in kpi)
+    # to avoid phantom P&L from mixing T212 OTC prices with yfinance prices.
+    # For other backends: derive from live_pnl (yfinance) and total.
+    if CONFIG.broker_backend == "t212" and "realized_pnl_eur" in kpi:
+        unrealized = kpi["unrealized_pnl_eur"]
+        realized   = kpi["realized_pnl_eur"]
+    else:
+        unrealized = live_pnl["unrealized_pnl_eur"] if live_pnl else 0.0
+        total_pl   = kpi["total_eur"] - initial
+        realized   = total_pl - unrealized
     unrl_color = "normal" if unrealized >= 0 else "inverse"
     rlzd_color = "normal" if realized   >= 0 else "inverse"
 

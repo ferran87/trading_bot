@@ -621,14 +621,23 @@ def _t212_account(demo: bool) -> dict[str, float] | None:
         resp.raise_for_status()
         data = resp.json()
         cash_block  = data.get("cash", {})
+        inv_block   = data.get("investments", {})
         total_block = data.get("totalValue", data.get("total", {}))
         cash  = float(cash_block.get("availableToTrade", cash_block.get("free", 0)))
         total = float(
             total_block if isinstance(total_block, (int, float))
             else total_block.get("amount", cash)
         )
-        invested = max(total - cash, 0.0)
-        return {"cash_eur": cash, "invested_eur": invested, "total_eur": total}
+        invested         = float(inv_block.get("currentValue", max(total - cash, 0.0)))
+        realized_pnl     = float(inv_block.get("realizedProfitLoss", 0.0))
+        unrealized_pnl   = float(inv_block.get("unrealizedProfitLoss", 0.0))
+        return {
+            "cash_eur":          cash,
+            "invested_eur":      invested,
+            "total_eur":         total,
+            "realized_pnl_eur":  realized_pnl,
+            "unrealized_pnl_eur": unrealized_pnl,
+        }
     except Exception as exc:
         log.warning("_t212_account(demo=%s): %s", demo, exc)
         return None
