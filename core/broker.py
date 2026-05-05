@@ -757,9 +757,8 @@ class Trading212Broker:
     def _build_pending_fill(self, order: Order, order_id: str) -> Fill:
         """Return a pending Fill using the reference price when the order is live
         but the market is closed.  Mirrors IBKRBroker._build_pending_fill."""
-        from core.types import AssetClass
+        from datetime import datetime, timezone
         return Fill(
-            bot_id=order.bot_id,
             ticker=order.ticker,
             side=order.side,
             qty=order.qty,
@@ -767,9 +766,9 @@ class Trading212Broker:
             price_eur=order.ref_price_eur,
             fx_rate=1.0,
             fee_eur=0.0,
+            timestamp=datetime.now(timezone.utc),
             broker_order_id=order_id,
-            asset_class=order.asset_class or AssetClass.STOCK,
-            status="pending",
+            is_pending=True,
         )
 
     def _build_fill(
