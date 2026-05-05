@@ -182,22 +182,18 @@ def _kpi_with_ibkr(
     use_t212  = CONFIG.broker_backend == "t212"
 
     if use_t212:
+        # Per-bot KPIs come from the SQLite virtual book (which is per-bot).
+        # T212 account data is account-wide and cannot be split meaningfully
+        # between bots — splitting equally gives identical cards regardless of
+        # what each bot traded.  Only the return_pct baseline is overridden to
+        # use actual deposited capital instead of the settings.yaml default.
         demo = (mode != "live")
-        t212_acc       = _t212_account(demo)
         t212_deposited = _t212_total_deposited(demo)
-        if t212_acc:
-            n      = max(n_active_bots, 1)
-            total  = t212_acc["total_eur"]
-            deposit_share = (t212_deposited / n if t212_deposited > 0
-                             else float(bot["initial_eur"]))
-            kpi["total_eur"]         = total / n
-            kpi["cash_eur"]          = t212_acc["cash_eur"] / n
-            kpi["invested_eur"]      = t212_acc["invested_eur"] / n
-            # Use T212's own realized/unrealized — avoids mixing T212 OTC
-            # prices with yfinance exchange prices which creates phantom P&L.
-            kpi["realized_pnl_eur"]  = t212_acc["realized_pnl_eur"] / n
-            kpi["unrealized_pnl_eur"] = t212_acc["unrealized_pnl_eur"] / n
-            kpi["return_pct"]        = (total / n / deposit_share - 1.0) if deposit_share else 0.0
+        n = max(n_active_bots, 1)
+        deposit_share = (t212_deposited / n if t212_deposited > 0
+                         else float(bot["initial_eur"]))
+        if deposit_share:
+            kpi["return_pct"] = kpi["total_eur"] / deposit_share - 1.0
         return kpi
 
     if not use_ibkr:
@@ -247,14 +243,8 @@ def _combined_kpis(bots_subset: pd.DataFrame, kpis: dict[int, dict],
     trades   = sum(k["n_trades"]     for k in kpis.values())
     ret      = total / initial_total - 1.0 if initial_total else 0.0
     max_dd   = min(k["max_dd"] for k in kpis.values()) if kpis else 0.0
-    # For T212: use the broker's own figures already stored in each bot's kpi
-    # to avoid phantom P&L from mixing T212 OTC prices with yfinance prices.
-    if CONFIG.broker_backend == "t212" and all("realized_pnl_eur" in k for k in kpis.values()):
-        unrealized = sum(k["unrealized_pnl_eur"] for k in kpis.values())
-        realized   = sum(k["realized_pnl_eur"]   for k in kpis.values())
-    else:
-        unrealized = sum(v["unrealized_pnl_eur"] for v in (live_pnls or {}).values())
-        realized   = (total - initial_total) - unrealized
+    unrealized = sum(v["unrealized_pnl_eur"] for v in (live_pnls or {}).values())
+    realized   = (total - initial_total) - unrealized
     return {
         "total_eur": total, "cash_eur": cash, "invested_eur": invested,
         "return_pct": ret, "max_dd": max_dd, "fees_eur": fees, "n_trades": trades,
@@ -412,17 +402,10 @@ def _render_bot_card(bot: pd.Series, kpi: dict, floor: float, mode: str,
     icon   = _status_color(kpi["total_eur"], floor, mode)
     ret_color = "normal" if kpi["return_pct"] >= 0 else "inverse"
 
-    initial = float(bot["initial_eur"])
-    # For T212: use the broker's own realized/unrealized figures (already in kpi)
-    # to avoid phantom P&L from mixing T212 OTC prices with yfinance prices.
-    # For other backends: derive from live_pnl (yfinance) and total.
-    if CONFIG.broker_backend == "t212" and "realized_pnl_eur" in kpi:
-        unrealized = kpi["unrealized_pnl_eur"]
-        realized   = kpi["realized_pnl_eur"]
-    else:
-        unrealized = live_pnl["unrealized_pnl_eur"] if live_pnl else 0.0
-        total_pl   = kpi["total_eur"] - initial
-        realized   = total_pl - unrealized
+    initial    = float(bot["initial_eur"])
+    unrealized = live_pnl["unrealized_pnl_eur"] if live_pnl else 0.0
+    total_pl   = kpi["total_eur"] - initial
+    realized   = total_pl - unrealized
     unrl_color = "normal" if unrealized >= 0 else "inverse"
     rlzd_color = "normal" if realized   >= 0 else "inverse"
 
@@ -938,11 +921,10 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     # ── Live P&L from current market prices (yfinance) ───────────────────────
     live_pnls = _compute_live_pnl_per_bot(bots_subset, positions_df)
 
-    # In mock mode the KPI total comes from stale equity snapshots; replace it
-    # with cash (always current) + live market value of open positions so the
-    # card matches what the positions table shows.
-    # T212 KPIs already reflect the live account total — skip this SQLite override.
-    if not use_ibkr and not use_t212:
+    # Replace stale equity-snapshot totals with cash + live yfinance prices.
+    # Applies to mock and T212 (per-bot KPIs both come from the SQLite virtual
+    # book; T212 live account total is shown separately in the account strip).
+    if not use_ibkr:
         for _, bot in bots_subset.iterrows():
             bot_id = int(bot["id"])
             lpnl = live_pnls.get(bot_id, {})
