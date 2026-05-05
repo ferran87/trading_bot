@@ -524,3 +524,94 @@ def _ibkr_executions(port: int) -> pd.DataFrame:
     except Exception as exc:
         log.warning("_ibkr_executions: port=%d: %s", port, exc)
         return pd.DataFrame()
+
+
+# ── T212 live account & portfolio ─────────────────────────────────────────────
+
+def _t212_headers(demo: bool) -> dict | None:
+    """Build the Basic-auth header for T212. Returns None if credentials missing."""
+    import base64
+    import os
+    suffix = "PAPER" if demo else "LIVE"
+    key    = os.environ.get(f"T212_API_KEY_{suffix}", "").strip()
+    secret = os.environ.get(f"T212_API_SECRET_{suffix}", "").strip()
+    if not key or not secret:
+        return None
+    token = base64.b64encode(f"{key}:{secret}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
+@st.cache_data(ttl=60)
+def _t212_account(demo: bool) -> dict[str, float] | None:
+    """Fetch cash and total equity from T212 /equity/account/summary.
+
+    Returns dict with keys: cash_eur, invested_eur, total_eur.
+    Returns None if credentials are missing or the API is unreachable.
+    """
+    import requests
+    headers = _t212_headers(demo)
+    if not headers:
+        return None
+    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
+    try:
+        resp = requests.get(
+            f"{base}/api/v0/equity/account/summary",
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        cash_block  = data.get("cash", {})
+        total_block = data.get("totalValue", data.get("total", {}))
+        cash  = float(cash_block.get("availableToTrade", cash_block.get("free", 0)))
+        total = float(
+            total_block if isinstance(total_block, (int, float))
+            else total_block.get("amount", cash)
+        )
+        invested = max(total - cash, 0.0)
+        return {"cash_eur": cash, "invested_eur": invested, "total_eur": total}
+    except Exception as exc:
+        log.warning("_t212_account(demo=%s): %s", demo, exc)
+        return None
+
+
+@st.cache_data(ttl=30)
+def _t212_portfolio(demo: bool) -> pd.DataFrame:
+    """Fetch open positions from T212 /equity/portfolio.
+
+    Returns a DataFrame with columns:
+      ticker, qty, avg_cost_eur, market_value_eur, unrealized_pnl_eur, currency
+
+    Returns an empty DataFrame when the account is empty (T212 returns 403 for
+    an empty portfolio — this is expected, not an auth error) or unreachable.
+    """
+    import requests
+    headers = _t212_headers(demo)
+    if not headers:
+        return pd.DataFrame()
+    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
+    try:
+        resp = requests.get(
+            f"{base}/api/v0/equity/portfolio",
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code == 403:
+            return pd.DataFrame()   # empty account — not an auth failure
+        resp.raise_for_status()
+        items = resp.json()
+        rows = []
+        for item in items:
+            qty = float(item.get("quantity", 0))
+            rows.append({
+                "ticker":             item.get("ticker", ""),
+                "qty":                qty,
+                "avg_cost_eur":       float(item.get("averagePrice", 0)),
+                "market_value_eur":   float(item.get("currentPrice", 0)) * qty,
+                "unrealized_pnl_eur": float(item.get("ppl", 0)),
+                "currency":           item.get("currency", "EUR"),
+            })
+        return pd.DataFrame(rows)
+    except Exception as exc:
+        log.warning("_t212_portfolio(demo=%s): %s", demo, exc)
+        return pd.DataFrame()

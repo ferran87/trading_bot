@@ -34,6 +34,8 @@ from dashboard.queries import (  # noqa: E402
     _run_logs,
     _set_owner_live_enabled,
     _set_owner_mode_strategies,
+    _t212_account,
+    _t212_portfolio,
     _trades,
 )
 
@@ -174,6 +176,19 @@ def _kpi_with_ibkr(
     """
     kpi = _kpis_for(bot, equity_df, trades_df)
     use_ibkr = CONFIG.broker_backend == "ibkr"
+    use_t212  = CONFIG.broker_backend == "t212"
+
+    if use_t212:
+        demo = (mode != "live")
+        t212_acc = _t212_account(demo)
+        if t212_acc:
+            total_t212 = t212_acc["total_eur"]
+            bot_share  = total_t212 / max(n_active_bots, 1)
+            kpi["total_eur"]  = bot_share
+            kpi["cash_eur"]   = max(bot_share - kpi["invested_eur"], 0.0)
+            kpi["return_pct"] = bot_share / float(bot["initial_eur"]) - 1.0 if bot["initial_eur"] else 0.0
+        return kpi
+
     if not use_ibkr:
         return kpi
 
@@ -830,11 +845,16 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
             st.info("Cap bot de paper actiu per a aquest compte.")
         return
 
-    # ── Fetch IBKR live data (once per tab render) ────────────────────────────
+    # ── Fetch live broker data (once per tab render) ──────────────────────────
     use_ibkr = CONFIG.broker_backend == "ibkr"
+    use_t212  = CONFIG.broker_backend == "t212"
+
     ibkr_port = _get_ibkr_port(bots_subset, mode) if use_ibkr else None
     ibkr_portfolio  = _ibkr_portfolio(ibkr_port)  if ibkr_port else pd.DataFrame()
     ibkr_executions = _ibkr_executions(ibkr_port) if ibkr_port else pd.DataFrame()
+
+    t212_demo      = (mode != "live")
+    t212_portfolio = _t212_portfolio(t212_demo) if use_t212 else pd.DataFrame()
 
     # ── Strategy info expanders ───────────────────────────────────────────────
     seen: set[str] = set()
@@ -861,7 +881,8 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     # In mock mode the KPI total comes from stale equity snapshots; replace it
     # with cash (always current) + live market value of open positions so the
     # card matches what the positions table shows.
-    if not use_ibkr:
+    # T212 KPIs already reflect the live account total — skip this SQLite override.
+    if not use_ibkr and not use_t212:
         for _, bot in bots_subset.iterrows():
             bot_id = int(bot["id"])
             lpnl = live_pnls.get(bot_id, {})
@@ -898,6 +919,10 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
         st.caption("Font: IBKR Gateway (temps real) · Posicions del bot i manuals.")
     elif use_ibkr:
         st.caption("⚠️ IBKR Gateway no disponible — mostrant SQLite.")
+    elif use_t212 and not t212_portfolio.empty:
+        st.caption("Font: Trading 212 API (en viu) · Posicions del compte.")
+    elif use_t212:
+        st.caption("Font: SQLite (compte T212 buit o sense connexio).")
     _render_positions(
         bots_subset, positions_df, floor,
         ibkr_portfolio_df=ibkr_portfolio if use_ibkr else None,

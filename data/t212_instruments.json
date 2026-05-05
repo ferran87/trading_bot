@@ -1,0 +1,415 @@
+{
+  "NVDA": {
+    "t212_ticker": "NVDA_US_EQ",
+    "isin": "US67066G1040",
+    "name": "NVDA",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "AMZN": {
+    "t212_ticker": "AMZN_US_EQ",
+    "isin": "US0231351067",
+    "name": "AMZN",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "TSLA": {
+    "t212_ticker": "TSLA_US_EQ",
+    "isin": "US88160R1014",
+    "name": "TSLA",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "AMD": {
+    "t212_ticker": "AMD_US_EQ",
+    "isin": "US0079031078",
+    "name": "AMD",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "PLTR": {
+    "t212_ticker": "PLTR_US_EQ",
+    "isin": "US69608A1088",
+    "name": "PLTR",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "GOOGL": {
+    "t212_ticker": "GOOGL_US_EQ",
+    "isin": "US02079K3059",
+    "name": "GOOGL",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "AAPL": {
+    "t212_ticker": "AAPL_US_EQ",
+    "isin": "US0378331005",
+    "name": "AAPL",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "MSFT": {
+    "t212_ticker": "MSFT_US_EQ",
+    "isin": "US5949181045",
+    "name": "MSFT",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "AVGO": {
+    "t212_ticker": "AVGO_US_EQ",
+    "isin": "US11135F1012",
+    "name": "AVGO",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "MU": {
+    "t212_ticker": "MU_US_EQ",
+    "isin": "US5951121038",
+    "name": "MU",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "QCOM": {
+    "t212_ticker": "QCOM_US_EQ",
+    "isin": "US7475251036",
+    "name": "QCOM",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "JPM": {
+    "t212_ticker": "JPM_US_EQ",
+    "isin": "US46625H1005",
+    "name": "JPM",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "V": {
+    "t212_ticker": "V_US_EQ",
+    "isin": "US92826C8394",
+    "name": "V",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "BAC": {
+    "t212_ticker": "BAC_US_EQ",
+    "isin": "US0605051046",
+    "name": "BAC",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "GS": {
+    "t212_ticker": "GS_US_EQ",
+    "isin": "US38141G1040",
+    "name": "GS",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "UNH": {
+    "t212_ticker": "UNH_US_EQ",
+    "isin": "US91324P1021",
+    "name": "UNH",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "JNJ": {
+    "t212_ticker": "JNJ_US_EQ",
+    "isin": "US4781601046",
+    "name": "JNJ",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "PFE": {
+    "t212_ticker": "PFE_US_EQ",
+    "isin": "US7170811035",
+    "name": "PFE",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "LLY": {
+    "t212_ticker": "LLY_US_EQ",
+    "isin": "US5324571083",
+    "name": "LLY",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "XOM": {
+    "t212_ticker": "XOM_US_EQ",
+    "isin": "US30231G1022",
+    "name": "XOM",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "CVX": {
+    "t212_ticker": "CVX_US_EQ",
+    "isin": "US1667641005",
+    "name": "CVX",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "CAT": {
+    "t212_ticker": "CAT_US_EQ",
+    "isin": "US1491231015",
+    "name": "CAT",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "HON": {
+    "t212_ticker": "HON_US_EQ",
+    "isin": "US4385161066",
+    "name": "HON",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "PG": {
+    "t212_ticker": "PG_US_EQ",
+    "isin": "US7427181091",
+    "name": "PG",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "KO": {
+    "t212_ticker": "KO_US_EQ",
+    "isin": "US1912161007",
+    "name": "KO",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "WMT": {
+    "t212_ticker": "WMT_US_EQ",
+    "isin": "US9311421039",
+    "name": "WMT",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "COST": {
+    "t212_ticker": "COST_US_EQ",
+    "isin": "US22160K1051",
+    "name": "COST",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "HD": {
+    "t212_ticker": "HD_US_EQ",
+    "isin": "US4370761029",
+    "name": "HD",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "NKE": {
+    "t212_ticker": "NKE_US_EQ",
+    "isin": "US6541061031",
+    "name": "NKE",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "DIS": {
+    "t212_ticker": "DIS_US_EQ",
+    "isin": "US2546871060",
+    "name": "DIS",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "UBER": {
+    "t212_ticker": "UBER_US_EQ",
+    "isin": "US90353T1007",
+    "name": "UBER",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "SHOP": {
+    "t212_ticker": "SHOP_US_EQ",
+    "isin": "CA82509L1076",
+    "name": "SHOP",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "CRM": {
+    "t212_ticker": "CRM_US_EQ",
+    "isin": "US79466L3024",
+    "name": "CRM",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "NOW": {
+    "t212_ticker": "NOW_US_EQ",
+    "isin": "US81762P1021",
+    "name": "NOW",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "ASML.AS": {
+    "t212_ticker": "ASMLa_EQ",
+    "isin": "NL0010273215",
+    "name": "ASML",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "SAP.DE": {
+    "t212_ticker": "SAPd_EQ",
+    "isin": "DE0007164600",
+    "name": "SAP",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "MC.PA": {
+    "t212_ticker": "MCp_EQ",
+    "isin": "FR0000121014",
+    "name": "MC",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "OR.PA": {
+    "t212_ticker": "ORp_EQ",
+    "isin": "FR0000120321",
+    "name": "OR",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "AIR.PA": {
+    "t212_ticker": "AIRp_EQ",
+    "isin": "NL0000235190",
+    "name": "AIR",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "BNP.PA": {
+    "t212_ticker": "BNPp_EQ",
+    "isin": "FR0000131104",
+    "name": "BNP",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "BMW.DE": {
+    "t212_ticker": "BMWd_EQ",
+    "isin": "DE0005190003",
+    "name": "BMW",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "ALV.DE": {
+    "t212_ticker": "ALVd_EQ",
+    "isin": "DE0008404005",
+    "name": "ALV",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "META": {
+    "t212_ticker": "FB_US_EQ",
+    "isin": "US30303M1027",
+    "name": "META",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "BKNG": {
+    "t212_ticker": "PCLN_US_EQ",
+    "isin": "US09857L1089",
+    "name": "BKNG",
+    "currency": "USD",
+    "type": "STOCK"
+  },
+  "SXR8.DE": {
+    "t212_ticker": "SXR8d_EQ",
+    "isin": "IE00B5BMR087",
+    "name": "SXR8",
+    "currency": "EUR",
+    "type": "ETF"
+  },
+  "SXRV.DE": {
+    "t212_ticker": "SXRVd_EQ",
+    "isin": "IE00B53SZB19",
+    "name": "SXRV",
+    "currency": "EUR",
+    "type": "ETF"
+  },
+  "ZPRR.DE": {
+    "t212_ticker": "XRSMd_EQ",
+    "isin": "IE00BJZ2DC62",
+    "name": "XRSM",
+    "currency": "EUR",
+    "type": "ETF"
+  },
+  "EXSA.DE": {
+    "t212_ticker": "EXSAd_EQ",
+    "isin": "DE0002635307",
+    "name": "EXSA",
+    "currency": "EUR",
+    "type": "ETF"
+  },
+  "XDWD.DE": {
+    "t212_ticker": "XDWDd_EQ",
+    "isin": "IE00BJ0KDQ92",
+    "name": "XDWD",
+    "currency": "EUR",
+    "type": "ETF"
+  },
+  "QDVE.DE": {
+    "t212_ticker": "VUSAa_EQ",
+    "isin": "IE00B3XXRP09",
+    "name": "VUSA",
+    "currency": "EUR",
+    "type": "ETF"
+  },
+  "QDVH.DE": {
+    "t212_ticker": "QDVHd_EQ",
+    "isin": "IE00B4JNQZ49",
+    "name": "QDVH",
+    "currency": "EUR",
+    "type": "ETF"
+  },
+  "IFX.DE": {
+    "t212_ticker": "IFXd_EQ",
+    "isin": "DE0006231004",
+    "name": "IFX",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "RMS.PA": {
+    "t212_ticker": "RMSp_EQ",
+    "isin": "FR0000052292",
+    "name": "RMS",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "NESN.SW": {
+    "t212_ticker": "NESNs_EQ",
+    "isin": "CH0038863350",
+    "name": "NESN",
+    "currency": "CHF",
+    "type": "STOCK"
+  },
+  "SIE.DE": {
+    "t212_ticker": "SIEd_EQ",
+    "isin": "DE0007236101",
+    "name": "SIE",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "TTE.PA": {
+    "t212_ticker": "ERFp_EQ",
+    "isin": "FR0014000MR3",
+    "name": "ERF",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "NOVN.SW": {
+    "t212_ticker": "NOVNs_EQ",
+    "isin": "CH0012005267",
+    "name": "NOVN",
+    "currency": "CHF",
+    "type": "STOCK"
+  },
+  "BAYN.DE": {
+    "t212_ticker": "BAYNd_EQ",
+    "isin": "DE000BAY0017",
+    "name": "BAYN",
+    "currency": "EUR",
+    "type": "STOCK"
+  },
+  "RHM.DE": {
+    "t212_ticker": "RHMd_EQ",
+    "isin": "DE0007030009",
+    "name": "RHM",
+    "currency": "EUR",
+    "type": "STOCK"
+  }
+}
