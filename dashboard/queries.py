@@ -113,24 +113,35 @@ def _reconcile_cached(bot_ids: tuple[int, ...], ibkr_port: int) -> list[dict]:
                  "sqlite_qty": 0, "ibkr_qty": 0, "error": str(exc)}]
 
 
+_EQUITY_COLUMNS    = ["bot_id", "date", "cash", "positions", "total"]
+_POSITIONS_COLUMNS = ["bot_id", "ticker", "nom", "quantitat", "preu_entrada_eur",
+                      "cost_eur", "data_entrada", "senyal_entrada"]
+_TRADES_COLUMNS    = ["bot_id", "data", "ticker", "nom", "operació", "quantitat",
+                      "preu_eur", "total_eur", "comissió_eur", "senyal", "estat"]
+_RUNLOG_COLUMNS    = ["bot_id", "bot", "data_execució", "data_mercat", "tipus",
+                      "compres", "vendes", "rebutjades", "decisió", "explicació"]
+_CLOSED_COLUMNS    = ["bot_id", "ticker", "nom", "data_entrada", "data_sortida",
+                      "dies", "quantitat", "preu_entrada", "preu_sortida", "P&L €", "P&L %"]
+
+
 @st.cache_data(ttl=30)
 def _equity_history() -> pd.DataFrame:
     with get_session() as s:
         rows = s.query(EquitySnapshot).order_by(EquitySnapshot.snap_date).all()
-        df = pd.DataFrame(
-            [
-                {
-                    "bot_id": r.bot_id,
-                    "date": r.snap_date,
-                    "cash": r.cash_eur,
-                    "positions": r.positions_value_eur,
-                    "total": r.total_eur,
-                }
-                for r in rows
-            ]
-        )
-        if not df.empty:
-            df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+        data = [
+            {
+                "bot_id": r.bot_id,
+                "date": r.snap_date,
+                "cash": r.cash_eur,
+                "positions": r.positions_value_eur,
+                "total": r.total_eur,
+            }
+            for r in rows
+        ]
+        if not data:
+            return pd.DataFrame(columns=_EQUITY_COLUMNS)
+        df = pd.DataFrame(data)
+        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
         return df
 
 
@@ -244,6 +255,8 @@ def _open_positions() -> pd.DataFrame:
     names = _asset_names()
     with get_session() as s:
         positions = s.query(Position).all()
+        if not positions:
+            return pd.DataFrame(columns=_POSITIONS_COLUMNS)
         # Fetch first BUY trade per (bot_id, ticker) for the entry signal reason.
         from sqlalchemy import func
         first_buy_ids = (
@@ -274,7 +287,7 @@ def _open_positions() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def _closed_positions() -> pd.DataFrame:
+def _closed_positions() -> pd.DataFrame:  # noqa: C901
     """Compute closed-position P&L from the trades ledger.
 
     For each (bot_id, ticker) that has at least one SELL trade, reconstructs
@@ -339,9 +352,10 @@ def _closed_positions() -> pd.DataFrame:
                 "P&L %":          f"{pl_pct:+.1f}%",
             })
 
+    if not rows:
+        return pd.DataFrame(columns=_CLOSED_COLUMNS)
     df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values("data_sortida", ascending=False).reset_index(drop=True)
+    df = df.sort_values("data_sortida", ascending=False).reset_index(drop=True)
     return df
 
 
@@ -352,24 +366,25 @@ def _trades(limit: int = 500) -> pd.DataFrame:
         rows = (
             s.query(Trade).order_by(Trade.timestamp.desc()).limit(limit).all()
         )
-        return pd.DataFrame(
-            [
-                {
-                    "bot_id": t.bot_id,
-                    "data": t.timestamp,
-                    "ticker": t.ticker,
-                    "nom": names.get(t.ticker, t.ticker),
-                    "operació": t.side,
-                    "quantitat": t.qty,
-                    "preu_eur": round(t.price_eur, 2),
-                    "total_eur": round(t.qty * t.price_eur, 2),
-                    "comissió_eur": round(t.fee_eur, 2),
-                    "senyal": t.signal_reason,
-                    "estat": getattr(t, "status", "filled"),  # "filled" | "pending"
-                }
-                for t in rows
-            ]
-        )
+        data = [
+            {
+                "bot_id": t.bot_id,
+                "data": t.timestamp,
+                "ticker": t.ticker,
+                "nom": names.get(t.ticker, t.ticker),
+                "operació": t.side,
+                "quantitat": t.qty,
+                "preu_eur": round(t.price_eur, 2),
+                "total_eur": round(t.qty * t.price_eur, 2),
+                "comissió_eur": round(t.fee_eur, 2),
+                "senyal": t.signal_reason,
+                "estat": getattr(t, "status", "filled"),
+            }
+            for t in rows
+        ]
+        if not data:
+            return pd.DataFrame(columns=_TRADES_COLUMNS)
+        return pd.DataFrame(data)
 
 
 @st.cache_data(ttl=60)
@@ -382,23 +397,24 @@ def _run_logs(limit: int = 100) -> pd.DataFrame:
             .limit(limit)
             .all()
         )
-        return pd.DataFrame(
-            [
-                {
-                    "bot_id": r.RunLog.bot_id,
-                    "bot": r.name,
-                    "data_execució": r.RunLog.timestamp,
-                    "data_mercat": r.RunLog.run_date,
-                    "tipus": "🕐 Auto" if (getattr(r.RunLog, "triggered_by", None) or "auto") == "auto" else "👤 Manual",
-                    "compres": r.RunLog.n_buys,
-                    "vendes": r.RunLog.n_sells,
-                    "rebutjades": r.RunLog.n_rejected,
-                    "decisió": r.RunLog.summary,
-                    "explicació": r.RunLog.explanation or "",
-                }
-                for r in rows
-            ]
-        )
+        data = [
+            {
+                "bot_id": r.RunLog.bot_id,
+                "bot": r.name,
+                "data_execució": r.RunLog.timestamp,
+                "data_mercat": r.RunLog.run_date,
+                "tipus": "🕐 Auto" if (getattr(r.RunLog, "triggered_by", None) or "auto") == "auto" else "👤 Manual",
+                "compres": r.RunLog.n_buys,
+                "vendes": r.RunLog.n_sells,
+                "rebutjades": r.RunLog.n_rejected,
+                "decisió": r.RunLog.summary,
+                "explicació": r.RunLog.explanation or "",
+            }
+            for r in rows
+        ]
+        if not data:
+            return pd.DataFrame(columns=_RUNLOG_COLUMNS)
+        return pd.DataFrame(data)
 
 
 @st.cache_data(ttl=60)
