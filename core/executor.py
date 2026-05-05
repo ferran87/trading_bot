@@ -19,10 +19,12 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Iterable
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core import risk
 from core.broker import BrokerInterface
+from core.db import Trade as TradeModel
 from core.portfolio import Portfolio
 from core.types import Fill, Order, PortfolioSnapshot
 
@@ -66,6 +68,28 @@ def run_orders(
     sorted_orders = sorted(orders, key=lambda o: 0 if o.side.value == "SELL" else 1)
 
     for order in sorted_orders:
+        # Guard: never place a second BUY for the same ticker on the same day.
+        # This prevents duplicate orders when the bot runs multiple times (e.g.
+        # scheduler fires + manual run) and the first order is still pending.
+        if order.side.value == "BUY":
+            already = (
+                session.query(TradeModel)
+                .filter(
+                    TradeModel.bot_id == bot_id,
+                    TradeModel.ticker == order.ticker,
+                    TradeModel.side == "BUY",
+                    func.date(TradeModel.timestamp) == today,
+                )
+                .first()
+            )
+            if already:
+                log.info(
+                    "SKIPPED  bot=%d BUY %s — already bought today (trade_id=%d)",
+                    bot_id, order.ticker, already.id,
+                )
+                report.rejected.append((order, "already bought this ticker today"))
+                continue
+
         decision = risk.check(session, order, snapshot, today)
         if not decision.approved:
             report.rejected.append((order, decision.reason))

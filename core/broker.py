@@ -765,7 +765,7 @@ class Trading212Broker:
             price=order.ref_price_eur,
             price_eur=order.ref_price_eur,
             fx_rate=1.0,
-            fee_eur=0.0,
+            fee_eur=estimate_fee_eur(order.ticker, order.qty, order.ref_price_eur),
             timestamp=datetime.now(timezone.utc),
             broker_order_id=order_id,
             is_pending=True,
