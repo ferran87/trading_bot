@@ -601,18 +601,31 @@ class Trading212Broker:
 
     # -- connection lifecycle --
 
+    def _fetch_account(self) -> dict:
+        """Fetch account summary and return {cash_eur, total_eur, currency}.
+
+        Used by connect() for logging and by _sync_t212_initial_capital() to
+        distribute the account balance across bots before each run.
+        """
+        info = self._get("/equity/account/summary")
+        cash_block = info.get("cash", {})
+        total_block = info.get("totalValue", info.get("total", {}))
+        free = float(cash_block.get("availableToTrade", cash_block.get("free", 0)))
+        total = float(
+            total_block if isinstance(total_block, (int, float))
+            else total_block.get("amount", free)
+        )
+        currency = info.get("currency", cash_block.get("currencyCode", "EUR"))
+        return {"cash_eur": free, "total_eur": total, "currency": currency}
+
     def connect(self) -> None:
         """Validate credentials by fetching account summary."""
-        info = self._get("/equity/account/summary")
-        cash = info.get("cash", {})
-        # Summary endpoint uses "availableToTrade"; cash endpoint uses "free".
-        free = float(cash.get("availableToTrade", cash.get("free", 0)))
-        currency = info.get("currency", cash.get("currencyCode", "EUR"))
+        acct = self._fetch_account()
         log.info(
             "Trading212Broker connected (%s): free_cash=%.2f %s",
             "DEMO" if self._demo else "LIVE",
-            free,
-            currency,
+            acct["cash_eur"],
+            acct["currency"],
         )
 
     def disconnect(self) -> None:
@@ -700,14 +713,28 @@ class Trading212Broker:
         order_data = self._post("/equity/orders/market", payload)
         order_id = order_data["id"]
 
-        # Poll until filled — market orders on T212 usually fill in <5 s.
+        # Poll until filled — market orders on T212 usually fill in <5 s during
+        # market hours.  Outside hours (pre-market / post-market) the order sits
+        # as 'NEW' until the exchange opens.  We treat 'NEW' at timeout the same
+        # way as IBKR's 'Submitted': record a pending fill at the reference price
+        # rather than raising — the order stays live at T212 and will fill when
+        # the market opens.
         deadline = time.monotonic() + self._ORDER_POLL_TIMEOUT_SEC
         while order_data.get("status") not in ("FILLED", "CANCELLED", "REJECTED"):
             if time.monotonic() >= deadline:
+                last_status = order_data.get("status")
+                if last_status == "NEW":
+                    log.info(
+                        "Trading212Broker: order %s for %s still NEW after %.0fs "
+                        "— market likely closed, recording as pending fill "
+                        "(order stays live at T212)",
+                        order_id, order.ticker, self._ORDER_POLL_TIMEOUT_SEC,
+                    )
+                    return self._build_pending_fill(order, str(order_id))
                 raise RuntimeError(
                     f"Trading212Broker: order {order_id} for {order.ticker} "
                     f"did not fill within {self._ORDER_POLL_TIMEOUT_SEC:.0f}s "
-                    f"(last status={order_data.get('status')!r})"
+                    f"(last status={last_status!r})"
                 )
             time.sleep(self._ORDER_POLL_INTERVAL_SEC)
             try:
@@ -726,6 +753,24 @@ class Trading212Broker:
             )
 
         return self._build_fill(order, order_data, ccy, str(order_id))
+
+    def _build_pending_fill(self, order: Order, order_id: str) -> Fill:
+        """Return a pending Fill using the reference price when the order is live
+        but the market is closed.  Mirrors IBKRBroker._build_pending_fill."""
+        from core.types import AssetClass
+        return Fill(
+            bot_id=order.bot_id,
+            ticker=order.ticker,
+            side=order.side,
+            qty=order.qty,
+            price=order.ref_price_eur,
+            price_eur=order.ref_price_eur,
+            fx_rate=1.0,
+            fee_eur=0.0,
+            broker_order_id=order_id,
+            asset_class=order.asset_class or AssetClass.STOCK,
+            status="pending",
+        )
 
     def _build_fill(
         self,

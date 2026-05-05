@@ -57,9 +57,9 @@ guardrails:
   portfolio_floor_eur: 500
   max_trades_per_day: 5
   fee_profit_ratio_max: 0.25          # skip if round-trip fee > 25% of expected profit
-  # Virtual budget per bot: $1M paper account / 2 bots = $500K each ≈ €460K at 0.92 USD/EUR
+  # Virtual budget per bot: T212 paper account €50k / 2 active bots = €25k each.
   # Update this when account size or number of bots changes.
-  initial_capital_eur: 460000.0
+  initial_capital_eur: 25000.0
 
 # Reconciliation — positions held in IBKR outside the bot's control that should
 # be EXCLUDED from the SQLite ↔ IBKR reconciliation and auto-import.
