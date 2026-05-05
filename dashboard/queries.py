@@ -12,28 +12,37 @@ log = logging.getLogger(__name__)
 from core.db import Bot, EquitySnapshot, Position, RunLog, Trade, get_session
 
 
+_BOTS_COLUMNS = [
+    "id", "name", "strategy", "initial_eur", "enabled",
+    "owner", "trading_mode", "ibkr_port", "ibkr_port_paper",
+]
+
+
 @st.cache_data(ttl=30)
 def _load_bots() -> pd.DataFrame:
     from core.config import CONFIG
     bot_cfgs = {b["id"]: b for b in CONFIG.strategies.get("bots", [])}
     with get_session() as s:
         rows = s.query(Bot).order_by(Bot.id).all()
-        return pd.DataFrame(
-            [
-                {
-                    "id": b.id,
-                    "name": b.name,
-                    "strategy": b.strategy,
-                    "initial_eur": b.initial_capital_eur,
-                    "enabled": bool(b.enabled),
-                    "owner": b.owner or f"Bot {b.id}",
-                    "trading_mode": getattr(b, "trading_mode", "paper"),
-                    "ibkr_port": bot_cfgs.get(b.id, {}).get("ibkr_port"),
-                    "ibkr_port_paper": bot_cfgs.get(b.id, {}).get("ibkr_port_paper"),
-                }
-                for b in rows
-            ]
-        )
+        data = [
+            {
+                "id": b.id,
+                "name": b.name,
+                "strategy": b.strategy,
+                "initial_eur": b.initial_capital_eur,
+                "enabled": bool(b.enabled),
+                "owner": b.owner or f"Bot {b.id}",
+                "trading_mode": getattr(b, "trading_mode", "paper"),
+                "ibkr_port": bot_cfgs.get(b.id, {}).get("ibkr_port"),
+                "ibkr_port_paper": bot_cfgs.get(b.id, {}).get("ibkr_port_paper"),
+            }
+            for b in rows
+        ]
+        # Return an empty DataFrame with correct columns when the DB has no bots
+        # (e.g. fresh Streamlit Cloud deploy before --init-db has been run).
+        if not data:
+            return pd.DataFrame(columns=_BOTS_COLUMNS)
+        return pd.DataFrame(data)
 
 
 def _set_owner_mode_strategies(
