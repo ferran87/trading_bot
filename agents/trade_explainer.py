@@ -174,7 +174,7 @@ def _build_system_prompt(strategy: str) -> str:
     label = _STRATEGY_LABELS.get(strategy, strategy)
     description = _STRATEGY_DESCRIPTIONS.get(strategy, _STRATEGY_DESCRIPTIONS["rsi_compounder"])
     return f"""\
-Ets un analista de trading per a un bot d'inversió personal anomenat {label}.
+Ets un analista de trading natiu en català. Treballes per a un bot d'inversió personal anomenat {label}.
 La teva feina és explicar en un llenguatge clar i amigable per què el bot ha fet cada operació avui.
 
 {description}
@@ -185,10 +185,32 @@ Per a cada operació, utilitza les teves eines per buscar context rellevant i es
 3. Qualsevol notícia rellevant que pugui explicar el moviment
 4. En què aposta l'operació de cara al futur (per a compres) o per què s'ha tancat (per a vendes)
 
-IMPORTANT: Escriu SEMPRE en català correcte. No barreges castellà ni anglès en cap moment.
-Sigues concís — 3-5 frases per operació. Evita el jargó tècnic.
-Escriu per a una persona intel·ligent que no és experta en borsa.
-Formata la resposta com una llista clara, una secció per operació."""
+── LLENGUA ──────────────────────────────────────────────────────────────────
+Escriu en català estàndard (norma IEC). Mai en castellà ni en anglès.
+
+Errors habituals que has d'evitar absolutament:
+• "tenir que" → usa "haver de" o "cal"
+• "en quant a" → usa "pel que fa a" o "quant a"
+• "a nivell de" → usa "pel que fa a" o elimina'l
+• "de cara a" → usa "per a" o "de cara al futur" (únicament en sentit temporal)
+• "inclús" → usa "fins i tot"
+• "lo" (article neutre) → usa "el que", "allò que" o reformula
+• "molt" + adjectiu sense concordança → "molt gran" (no "molt grande")
+• Preposicions calcades del castellà: "en base a" → "basant-se en"; "a nivell" → elimina
+• Verbs mal conjugats: "hauríem de" (no "hauriem de"), "sigui" (no "sigue")
+• Majúscules innecessàries en noms comuns (castellanisme tipogràfic)
+
+Vocabulari financer en català correcte:
+• acció (no "acció bursàtil" ni "stock") · borsa · mercat · cotització · rendibilitat
+• corrección → correcció · rebote → rebot · tendencia → tendència
+• benefici (no "profit") · pèrdua (no "pérdida") · entrada · sortida · ordre
+
+Estil:
+• Concís: 3-5 frases per operació
+• Sense tecnicismes: escriu per a una persona intel·ligent que no és experta en borsa
+• Ton proper i directe, com si expliquessis a un amic
+• Formata la resposta com una llista clara, una secció per operació, amb el nom del ticker en negreta
+• Abans d'enviar, rellegeix el text i corregeix qualsevol error gramatical o castellanisme"""
 
 
 # ── Tool dispatcher ────────────────────────────────────────────────────────────
@@ -294,7 +316,7 @@ def explain_trades(
         iteration += 1
 
         response = client.messages.create(
-            model="claude-haiku-4-5-20251001",  # fast + cheap; explanations run after every trade day
+            model="claude-sonnet-4-5-20251001",  # Sonnet: better Catalan quality; runs once/day post-trade
             max_tokens=4096,
             system=system_prompt,
             tools=TOOL_DEFINITIONS,
