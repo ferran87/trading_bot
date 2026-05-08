@@ -834,16 +834,24 @@ class Trading212Broker:
 
     def _build_pending_fill(self, order: Order, order_id: str) -> Fill:
         """Return a pending Fill using the reference price when the order is live
-        but the market is closed.  Mirrors IBKRBroker._build_pending_fill."""
+        but the market is closed.  Mirrors IBKRBroker._build_pending_fill.
+
+        IMPORTANT: use the floored integer qty (same as what was sent to T212),
+        not order.qty (the strategy's fractional target).  T212 only executes
+        whole shares; recording a fractional qty here would cause the virtual
+        book to diverge from the actual T212 position.
+        """
+        import math
         from datetime import datetime, timezone
+        floored_qty = float(math.floor(abs(order.qty)))
         return Fill(
             ticker=order.ticker,
             side=order.side,
-            qty=order.qty,
+            qty=floored_qty,
             price=order.ref_price_eur,
             price_eur=order.ref_price_eur,
             fx_rate=1.0,
-            fee_eur=estimate_fee_eur(order.ticker, order.qty, order.ref_price_eur),
+            fee_eur=estimate_fee_eur(order.ticker, floored_qty, order.ref_price_eur),
             timestamp=datetime.now(timezone.utc),
             broker_order_id=order_id,
             is_pending=True,

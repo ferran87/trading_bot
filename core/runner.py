@@ -387,6 +387,198 @@ def _sync_t212_initial_capital(today: date) -> None:
         log.warning("_sync_t212_initial_capital failed: %s", exc)
 
 
+def _resolve_t212_pending_orders() -> None:
+    """Update pending T212 trades with actual filled qty/price from the T212 API.
+
+    When a T212 order is placed outside market hours it stays NEW until the
+    exchange opens.  The executor records it as ``status='pending'`` with the
+    reference price and the *floored* integer qty.  On the next run, this
+    function polls T212 for each pending broker_order_id and:
+
+    - If FILLED: updates qty → filledQuantity, price → filledPrice, status → filled.
+      Then recomputes the Position row so avg_entry_eur and qty are accurate.
+    - If CANCELLED / REJECTED: marks the trade cancelled and removes the position
+      if the position was only ever this trade.
+    - Still NEW / other: leaves untouched (will retry next run).
+
+    Failures per-order are logged but never block the main run.
+    """
+    try:
+        from core.db import Position, Trade, get_session
+        from core.portfolio import Portfolio
+
+        with get_session() as session:
+            pending = (
+                session.query(Trade)
+                .filter(
+                    Trade.status == "pending",
+                    Trade.broker_order_id.isnot(None),
+                )
+                .all()
+            )
+            if not pending:
+                return
+
+            log.info("_resolve_t212_pending: checking %d pending order(s)", len(pending))
+
+            # Group by trading_mode so we use the right T212 account (paper vs live)
+            from core.db import Bot
+            bot_mode: dict[int, str] = {
+                b.id: getattr(b, "trading_mode", "paper")
+                for b in session.query(Bot).all()
+            }
+
+            from core.broker import Trading212Broker
+
+            # Fetch complete order history once per demo/live account and index
+            # by order ID.  The individual /orders/{id} endpoint returns 404 once
+            # an order is old, so the history endpoint is the only reliable source.
+            def _fetch_history(broker: Trading212Broker) -> dict[str, dict]:
+                history: dict[str, dict] = {}
+                url: str | None = "/equity/history/orders"
+                while url:
+                    try:
+                        data = broker._get(url, params={"limit": 50})
+                    except Exception:
+                        break
+                    for item in data.get("items", []):
+                        order = item.get("order", {})
+                        oid = str(order.get("id", ""))
+                        if oid:
+                            history[oid] = item
+                    next_path = data.get("nextPagePath")
+                    url = next_path if next_path else None
+                return history
+
+            brokers: dict[bool, Trading212Broker] = {}
+            histories: dict[bool, dict[str, dict]] = {}
+
+            for trade in pending:
+                demo = (bot_mode.get(trade.bot_id, "paper") == "paper")
+                if demo not in brokers:
+                    brokers[demo]   = Trading212Broker(demo=demo)
+                    histories[demo] = _fetch_history(brokers[demo])
+
+                order_id  = str(trade.broker_order_id)
+                item      = histories[demo].get(order_id)
+                if item is None:
+                    log.debug(
+                        "_resolve_t212_pending: order %s not in history — leaving pending",
+                        order_id,
+                    )
+                    continue
+
+                order_data = item.get("order", {})
+                fill_data  = item.get("fill",  {})
+                status = order_data.get("status", "")
+
+                if status == "FILLED":
+                    filled_qty   = float(
+                        fill_data.get("quantity")
+                        or order_data.get("filledQuantity")
+                        or trade.qty
+                    )
+                    filled_price = float(
+                        fill_data.get("price")
+                        or order_data.get("filledPrice")
+                        or trade.price_eur
+                    )
+
+                    old_qty = trade.qty
+                    trade.qty       = filled_qty
+                    trade.price_eur = filled_price
+                    trade.status    = "filled"
+
+                    log.info(
+                        "_resolve_t212_pending: FILLED bot=%d %s %s qty %.4f->%.4f "
+                        "price %.4f->%.4f",
+                        trade.bot_id, trade.side, trade.ticker,
+                        old_qty, filled_qty, trade.price_eur, filled_price,
+                    )
+
+                    # Recompute the position from all trades for this (bot, ticker)
+                    _recompute_position(session, trade.bot_id, trade.ticker)
+
+                elif status in ("CANCELLED", "REJECTED"):
+                    trade.status = "cancelled"
+                    log.info(
+                        "_resolve_t212_pending: %s bot=%d %s %s — marking cancelled",
+                        status, trade.bot_id, trade.side, trade.ticker,
+                    )
+                    # Remove position if there are no other filled buys
+                    _recompute_position(session, trade.bot_id, trade.ticker)
+
+                else:
+                    log.debug(
+                        "_resolve_t212_pending: order %s still %s — leaving pending",
+                        trade.broker_order_id, status,
+                    )
+
+            session.commit()
+            log.info("_resolve_t212_pending: done")
+
+    except Exception as exc:
+        log.warning("_resolve_t212_pending_orders failed (non-fatal): %s", exc)
+
+
+def _recompute_position(session, bot_id: int, ticker: str) -> None:
+    """Recompute and upsert the Position row for (bot_id, ticker) from filled trades.
+
+    Recalculates qty and avg_entry_eur from the trades ledger so the position
+    is always consistent with what was actually executed.
+    """
+    from core.db import Position, Trade
+
+    filled_buys  = session.query(Trade).filter(
+        Trade.bot_id == bot_id,
+        Trade.ticker == ticker,
+        Trade.side   == "BUY",
+        Trade.status == "filled",
+    ).all()
+    filled_sells = session.query(Trade).filter(
+        Trade.bot_id == bot_id,
+        Trade.ticker == ticker,
+        Trade.side   == "SELL",
+        Trade.status == "filled",
+    ).all()
+
+    total_bought = sum(t.qty for t in filled_buys)
+    total_sold   = sum(t.qty for t in filled_sells)
+    net_qty      = total_bought - total_sold
+
+    pos = session.query(Position).filter(
+        Position.bot_id == bot_id,
+        Position.ticker == ticker,
+    ).one_or_none()
+
+    if net_qty <= 1e-6:
+        if pos is not None:
+            session.delete(pos)
+        return
+
+    # Weighted average entry price across all filled buys
+    avg_entry = (
+        sum(t.qty * t.price_eur for t in filled_buys) / total_bought
+        if total_bought > 0 else 0.0
+    )
+
+    if pos is None:
+        from core.db import Position as Pos
+        from datetime import date
+        first_buy = min(filled_buys, key=lambda t: t.timestamp)
+        pos = Pos(
+            bot_id=bot_id,
+            ticker=ticker,
+            qty=net_qty,
+            avg_entry_eur=avg_entry,
+            entry_date=first_buy.timestamp.date() if first_buy.timestamp else date.today(),
+        )
+        session.add(pos)
+    else:
+        pos.qty           = net_qty
+        pos.avg_entry_eur = avg_entry
+
+
 def run_once(
     today: date | None = None,
     *,
@@ -407,11 +599,10 @@ def run_once(
     validate_run_dates(today, as_of)
 
     # ── Pre-run: resolve any pending orders from previous sessions ─────────────
-    # Only for IBKR backend; mock and T212 use REST-based reconciliation
-    # (T212 orders fill synchronously, so there are no "pending" orders to
-    # resolve on startup).
     if CONFIG.broker_backend == "ibkr":
         _resolve_pending_orders_all_bots()
+    elif CONFIG.broker_backend == "t212":
+        _resolve_t212_pending_orders()
 
     # ── Pre-run: sync T212 account balance → per-bot initial capital ───────────
     # For fresh bots (no trades yet) the virtual book cash equals
