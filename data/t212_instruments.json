@@ -385,9 +385,9 @@
     "type": "STOCK"
   },
   "TTE.PA": {
-    "t212_ticker": "ERFp_EQ",
-    "isin": "FR0014000MR3",
-    "name": "ERF",
+    "t212_ticker": "FPp_EQ",
+    "isin": "FR0000120271",
+    "name": "TTE",
     "currency": "EUR",
     "type": "STOCK"
   },

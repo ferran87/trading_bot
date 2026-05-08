@@ -2,6 +2,48 @@
 
 Kept intentionally small — no Pydantic models yet; strategies read the raw
 dicts. If the schema grows unwieldy we can wrap with Pydantic later.
+
+YAML structure
+--------------
+settings.yaml  → CONFIG.settings
+    guardrails:  {initial_capital_eur, position_cap_stock, position_cap_etf,
+                  position_cap_crypto, portfolio_floor_eur, max_trades_per_day,
+                  fee_profit_ratio_cap}
+    fees:        {xetra_eur, lse_gbp, nyse_usd, ...}  (per-venue fee rates for IBKR)
+    fees_t212:   {xetra_eur, euronext_eur, lse_gbp, ...}  (per-venue fee rates for T212)
+    fx_pairs:    [EURUSD=X, EURGBP=X, ...]
+
+strategies.yaml → CONFIG.strategies
+    bots:        [{id, name, strategy, trading_mode, enabled, owner,
+                   ibkr_port, ibkr_port_paper, live_capital_since}, ...]
+    strategies:  {strategy_name: {universe, lookback_days, rsi_period, ...}}
+
+watchlists.yaml → CONFIG.watchlists
+    venue:       {ticker: {class: stock|etf|crypto, venue: xetra|nyse|...}}
+    stocks_us:   [AAPL, MSFT, ...]
+    stocks_eu:   [SXR8.DE, MC.PA, ...]
+    etfs_ucits:  [VWRL.AS, ...]
+    crypto_etps: [BTCE.DE, ...]
+
+Environment variables (all from .env or shell; shell overrides .env)
+---------------------------------------------------------------------
+BROKER_BACKEND              mock | ibkr | t212  (default: mock)
+DATABASE_URL                Supabase PostgreSQL — overrides local SQLite
+DATABASE_URL_IBKR           PostgreSQL for IBKR backend
+DATABASE_URL_T212           PostgreSQL for T212 backend
+
+IBKR_HOST                   IB Gateway host  (default: 127.0.0.1)
+IBKR_PORT                   IB Gateway port  (default: 4002)
+IBKR_CLIENT_ID_BASE         Base client ID   (default: 10)
+IBKR_ORDER_TIMEOUT_SEC      Seconds to wait for MKT fill  (default: 30)
+
+T212_API_KEY_PAPER          T212 demo API key
+T212_API_SECRET_PAPER       T212 demo API secret
+T212_API_KEY_LIVE           T212 live API key
+T212_API_SECRET_LIVE        T212 live API secret
+
+ANTHROPIC_API_KEY           Claude API for trade explainer  (optional)
+OPENAI_API_KEY              OpenAI API for trade explainer  (optional)
 """
 from __future__ import annotations
 

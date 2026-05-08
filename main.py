@@ -174,6 +174,12 @@ def main() -> int:
         try:
             from agents.trade_explainer import explain_trades
             from core.db import RunLog, get_session
+            # Build a quick bot_id → strategy lookup from YAML so the
+            # explainer uses the correct strategy description.
+            bot_strategy_map = {
+                b["id"]: b.get("strategy", "rsi_compounder")
+                for b in CONFIG.strategies.get("bots", [])
+            }
             for r in reports:
                 if not r.approved:
                     continue
@@ -188,7 +194,8 @@ def main() -> int:
                     }
                     for order, fill in r.approved
                 ]
-                explanation = explain_trades(r.bot_id, trades_for_agent, today)
+                bot_strategy = bot_strategy_map.get(r.bot_id, "rsi_compounder")
+                explanation = explain_trades(r.bot_id, trades_for_agent, today, bot_strategy=bot_strategy)
                 if explanation:
                     log.info(
                         "%s",

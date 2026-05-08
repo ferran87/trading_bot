@@ -235,9 +235,9 @@ mesurable per separat.
             st.markdown("**Baixada moderada**")
             st.caption("RSI < 50 o Drawdown 5–15%")
             st.markdown(
-                "Pullback dins una tendència alcista. "
+                "Retrocés dins una tendència alcista. "
                 "El Trend Momentum captura el rebot. "
-                "El RSI Compounder roman en cash."
+                "El RSI Compounder roman en efectiu."
             )
 
     with r3:
@@ -314,7 +314,7 @@ No és un bot actiu: pot estar mesos en efectiu fins que es dóna el moment adeq
         with st.container(border=True):
             st.markdown("**⚠️ Limitacions:**")
             st.markdown("""
-- Pot estar molts mesos en cash durant mercats alcistes
+- Pot estar molts mesos en efectiu durant mercats alcistes
 - Si el crash dura molt (BEAR prolongat), pot acumular pèrdues
 - Requereix paciència — no és un bot de rotació ràpida
 """)
@@ -327,7 +327,7 @@ No és un bot actiu: pot estar mesos en efectiu fins que es dóna el moment adeq
     left, right = st.columns([3, 2])
     with left:
         st.markdown("""
-**Filosofia:** *Compra el pull-back dins d'una tendència alcista.*
+**Filosofia:** *Compra el retrocés dins d'una tendència alcista.*
 
 Aquest bot opera quan el mercat va bé. Busca accions que estan en tendència
 alcista però que han tingut una correcció moderada (un "respir"). Entra en el
@@ -340,7 +340,7 @@ moment en què la tendència es reprèn.
    global positiva.
 2. **Acció en tendència:** preu de l'acció per sobre de la seva **SMA50** — tendència
    individual positiva.
-3. **Pull-back moderat:** RSI de l'acció entre **40 i 62** — ha baixat però no
+3. **Retrocés moderat:** RSI de l'acció entre **40 i 62** — ha baixat però no
    ha entrat en territori de pànic.
 4. **Momentum recuperant:** RSI actual més alt que fa **3 dies** — la correcció
    s'ha aturat i el comprador torna.
@@ -371,7 +371,7 @@ moment en què la tendència es reprèn.
             st.markdown("""
 - No opera durant crashes (el mercat cau per sota de la SMA200)
 - En mercats laterals pot entrar i sortir massa (whipsaw)
-- Menys efectiu en períodes de molta volatilitat
+- Menys eficaç en períodes de molta volatilitat
 """)
 
     st.divider()
@@ -392,25 +392,25 @@ exactament quan l'altre no opera.
                 unsafe_allow_html=True,
             )
             st.markdown("🤖 RSI Compounder **ACTIU**")
-            st.markdown("📈 Trend Momentum en cash")
+            st.markdown("📈 Trend Momentum en efectiu")
 
     with c2:
         with st.container(border=True):
             st.markdown("🟡 **CORRECCIÓ**")
-            st.markdown("🤖 RSI Compounder en cash")
+            st.markdown("🤖 RSI Compounder en efectiu")
             st.markdown("📈 Trend Momentum **ACTIU**")
 
     with c3:
         with st.container(border=True):
             st.markdown("🟢 **BULL**")
-            st.markdown("🤖 RSI Compounder en cash")
+            st.markdown("🤖 RSI Compounder en efectiu")
             st.markdown("📈 Trend Momentum **ACTIU**")
 
     with c4:
         with st.container(border=True):
             st.markdown("⬛ **BEAR**")
-            st.markdown("🤖 RSI Compounder en cash")
-            st.markdown("📈 Trend Momentum en cash")
+            st.markdown("🤖 RSI Compounder en efectiu")
+            st.markdown("📈 Trend Momentum en efectiu")
             st.caption("Ambdós protegeixen capital")
 
     st.markdown("")
@@ -475,7 +475,7 @@ El bot s'executa **una vegada al dia**, típicament al matí abans de l'obertura
 dels mercats europeus (09:00–09:30 CET). Analitza totes les accions de l'univers
 i col·loca les ordres que compleixen les condicions.
 
-En règims de calma (BULL sense pull-backs significatius), pot passar dies o
+En règims de calma (BULL sense correccions significatives), pot passar dies o
 setmanes sense operar. En moments de crash, pot entrar en diverses posicions
 el mateix dia.
 """)

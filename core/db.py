@@ -45,6 +45,11 @@ class Bot(Base):
     owner = Column(String, nullable=False, default="")         # display name for dashboard selector
     trading_mode = Column(String, nullable=False, default="paper")  # "paper" | "live"
     created_at = Column(DateTime, nullable=False, default=utcnow)
+    # Only count T212 deposits made on/after this date as the bot's capital.
+    # NULL = count all deposits (default for paper bots).
+    # Set to the date the live bot is first activated so pre-existing manual
+    # portfolio deposits are never included in the bot's budget.
+    live_capital_since = Column(Date, nullable=True, default=None)
 
     trades = relationship("Trade", back_populates="bot", cascade="all, delete-orphan")
     positions = relationship("Position", back_populates="bot", cascade="all, delete-orphan")
@@ -161,20 +166,39 @@ def engine():
 
 
 def _migrate(eng) -> None:
-    """Apply lightweight additive migrations (new nullable columns only)."""
+    """Apply lightweight additive migrations (new nullable columns only).
+
+    Uses IF NOT EXISTS so each statement is idempotent on PostgreSQL.
+    SQLite doesn't support IF NOT EXISTS on ADD COLUMN, so we fall back to
+    catching the "duplicate column" error there.
+    """
+    import logging as _log
     from sqlalchemy import text
+
+    _miglog = _log.getLogger(__name__)
+
+    # Prefer IF NOT EXISTS (PostgreSQL); SQLite will raise on duplicate column
+    # which is caught and ignored below.
     migrations = [
-        "ALTER TABLE run_logs ADD COLUMN explanation TEXT",
-        "ALTER TABLE trades ADD COLUMN status TEXT NOT NULL DEFAULT 'filled'",
-        "ALTER TABLE run_logs ADD COLUMN triggered_by TEXT DEFAULT 'auto'",
+        "ALTER TABLE run_logs ADD COLUMN IF NOT EXISTS explanation TEXT",
+        "ALTER TABLE trades ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'filled'",
+        "ALTER TABLE run_logs ADD COLUMN IF NOT EXISTS triggered_by TEXT DEFAULT 'auto'",
+        "ALTER TABLE bots ADD COLUMN IF NOT EXISTS live_capital_since DATE",
     ]
     with eng.connect() as conn:
         for sql in migrations:
             try:
                 conn.execute(text(sql))
                 conn.commit()
-            except Exception:
-                pass  # column already exists — safe to ignore
+            except Exception as exc:
+                err = str(exc).lower()
+                # SQLite raises "duplicate column name"; PostgreSQL IF NOT EXISTS
+                # prevents this. Anything else (e.g. permissions, timeout) is
+                # worth logging so it's not silently missed.
+                if "duplicate column" not in err and "already exists" not in err:
+                    _miglog.warning("_migrate: skipped migration (%s): %s", sql[:60], exc)
+                # Always continue — a single migration failure should not
+                # block the rest of the application from starting.
 
 
 def session_factory() -> sessionmaker[Session]:
@@ -200,6 +224,12 @@ def init_db() -> None:
     initial_capital = float(CONFIG.settings["guardrails"]["initial_capital_eur"])
     with get_session() as s:
         for b in CONFIG.strategies["bots"]:
+            # Parse optional live_capital_since (YYYY-MM-DD string or None)
+            lcs_raw = b.get("live_capital_since")
+            lcs: date | None = (
+                date.fromisoformat(str(lcs_raw)) if lcs_raw else None
+            )
+
             existing = s.query(Bot).filter(Bot.id == b["id"]).one_or_none()
             if existing is None:
                 s.add(
@@ -211,6 +241,7 @@ def init_db() -> None:
                         enabled=1 if b.get("enabled", True) else 0,
                         owner=b.get("owner", ""),
                         trading_mode=b.get("trading_mode", "paper"),
+                        live_capital_since=lcs,
                     )
                 )
             else:
@@ -219,6 +250,10 @@ def init_db() -> None:
                 existing.enabled = 1 if b.get("enabled", True) else 0
                 existing.owner = b.get("owner", existing.owner)
                 existing.trading_mode = b.get("trading_mode", existing.trading_mode)
+                # Only update live_capital_since if explicitly set in YAML
+                # (don't overwrite a date set via dashboard with None)
+                if lcs is not None:
+                    existing.live_capital_since = lcs
         s.commit()
     print(f"DB ready at {CONFIG.db_path}")
 

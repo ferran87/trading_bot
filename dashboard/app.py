@@ -102,7 +102,7 @@ _STRATEGY_META: dict[str, dict] = {
             "Stop seguidor progressiu: 35% → 20% → 12% a mesura que el RSI puja sobre 70 i 80",
             "Dissenyat per mercats amb crashes en V; espera el moment exacte",
         ],
-        "self_selects": "✅ S'auto-selecciona: roman en cash si no hi ha crash",
+        "self_selects": "✅ S'autoselecciona: roman en efectiu si no hi ha crash",
     },
     "rsi_recovery": {
         "emoji":   "🔄",
@@ -114,7 +114,7 @@ _STRATEGY_META: dict[str, dict] = {
             "Requereix que el mercat en general també hagi caigut",
             "Stop seguidor del 15% els primers 7 dies; s'eixampla al 30% un cop en guanys",
         ],
-        "self_selects": "✅ S'auto-selecciona: roman en cash si no hi ha co-crash",
+        "self_selects": "✅ S'autoselecciona: roman en efectiu si el mercat global tampoc ha caigut",
     },
     "trend_momentum": {
         "emoji":   "📈",
@@ -122,12 +122,12 @@ _STRATEGY_META: dict[str, dict] = {
         "regime":  "Bull markets · Correccions moderades",
         "tagline": "Captura correccions dins de tendències alcistes",
         "points": [
-            "Entra quan el mercat (SXR8.DE) és sobre SMA200 I l'acció és sobre SMA50",
-            "RSI de l'acció entre 40–62 (pull-back moderat) i RSI pujant vs fa 3 dies",
-            "Stop catastròfic -15% · Trailing stop 22% des del pic · Sortida si 3 dies sota SMA50",
+            "Entra quan el mercat (SXR8.DE) és sobre SMA200 i l'acció és sobre SMA50",
+            "RSI de l'acció entre 40–62 (correcció moderada) i RSI més alt que fa 3 dies",
+            "Stop catastròfic -15% · Stop seguidor 22% des del pic · Sortida si 3 dies sota SMA50",
             "Dissenyat per mercats alcistes graduals i correccions del 10-15%",
         ],
-        "self_selects": "⚠️ Actiu durant bull markets, quiet durant crashes",
+        "self_selects": "⚠️ Actiu durant bull markets, inactiu durant els crashes",
     },
 }
 
@@ -598,7 +598,7 @@ def _render_positions(
             })
 
         if not rows:
-            st.caption("Cap posició oberta a l'account IBKR.")
+            st.caption("Cap posició oberta al compte IBKR.")
             return
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
@@ -671,14 +671,16 @@ def _render_risk_and_trades(
         # ── T212 open orders banner ───────────────────────────────────────────
         use_t212_orders = t212_open_orders_df is not None and not t212_open_orders_df.empty
         if use_t212_orders:
+            n_ord = len(t212_open_orders_df)
+            ord_text = "ordre pendent" if n_ord == 1 else "ordres pendents"
             lines = "  \n".join(
                 f"• **{r['ticker']}** {r['quantitat']:.0f} accions — {r['estat']}"
-                f"  _(creada {r['creat_at']})_"
+                f"  _(creada el {r['creat_at']})_"
                 for _, r in t212_open_orders_df.iterrows()
             )
             st.warning(
-                f"⏳ **{len(t212_open_orders_df)} ordre(s) pendent(s) a Trading 212** "
-                "(esperant obertura del mercat)\n\n" + lines
+                f"⏳ **{n_ord} {ord_text} a Trading 212** "
+                "(esperant l'obertura del mercat)\n\n" + lines
             )
         else:
             # ── Pending orders banner from SQLite (IBKR or no live data) ─────
@@ -689,6 +691,8 @@ def _render_risk_and_trades(
             if not active_trades.empty and "estat" in active_trades.columns:
                 pending = active_trades[active_trades["estat"] == "pending"]
                 if not pending.empty:
+                    n_pend = len(pending)
+                    pend_text = "ordre pendent" if n_pend == 1 else "ordres pendents"
                     lines = "  \n".join(
                         f"• **{r['ticker']}** {int(r['quantitat'])} accions"
                         f" — est. €{r['total_eur']:,.2f}"
@@ -696,8 +700,8 @@ def _render_risk_and_trades(
                     )
                     broker_name = "IBKR" if ibkr_executions_df is not None else "broker"
                     st.warning(
-                        f"⏳ **{len(pending)} ordre(s) pendent(s) a {broker_name}** "
-                        "(s'executarà quan el mercat obri)\n\n" + lines
+                        f"⏳ **{n_pend} {pend_text} a {broker_name}** "
+                        "(s'executaran quan el mercat obri)\n\n" + lines
                     )
 
     st.divider()
@@ -879,7 +883,7 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     if bots_subset.empty:
         if mode == "live":
             st.info(
-                "El trading en viu està **inactiu**.  \n"
+                "El mode en viu està **inactiu**.  \n"
                 "Activa'l amb el botó de dalt ↑"
             )
         else:
@@ -924,13 +928,30 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     # Replace stale equity-snapshot totals with cash + live yfinance prices.
     # Applies to mock and T212 (per-bot KPIs both come from the SQLite virtual
     # book; T212 live account total is shown separately in the account strip).
+    #
+    # IMPORTANT: use Portfolio.cash_eur() (reads from the trades ledger) rather
+    # than kpis[bot_id]["cash_eur"] (from the equity snapshot). The snapshot is
+    # only written at the end of each daily run, so if new positions filled today
+    # the snapshot cash is stale — it hasn't had today's purchases deducted yet.
+    # Reading directly from the trades table always gives the correct current cash,
+    # preventing the snapshot cash + live positions double-count that inflates
+    # "Realitzat" by the cost of same-day fills.
     if not use_ibkr:
+        from core.db import get_session as _get_session
+        from core.portfolio import Portfolio as _Portfolio
+        with _get_session() as _s:
+            fresh_cash: dict[int, float] = {
+                int(bot["id"]): _Portfolio.cash_eur(_s, int(bot["id"]))
+                for _, bot in bots_subset.iterrows()
+            }
         for _, bot in bots_subset.iterrows():
             bot_id = int(bot["id"])
             lpnl = live_pnls.get(bot_id, {})
             live_invested = lpnl.get("live_invested_eur", kpis[bot_id]["invested_eur"])
-            live_total    = kpis[bot_id]["cash_eur"] + live_invested
+            cash          = fresh_cash.get(bot_id, kpis[bot_id]["cash_eur"])
+            live_total    = cash + live_invested
             initial       = float(bot["initial_eur"])
+            kpis[bot_id]["cash_eur"]     = cash
             kpis[bot_id]["invested_eur"] = live_invested
             kpis[bot_id]["total_eur"]    = live_total
             kpis[bot_id]["return_pct"]   = (live_total / initial - 1.0) if initial else 0.0
@@ -983,7 +1004,7 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     elif use_t212 and not t212_portfolio.empty:
         st.caption("Font: Trading 212 API (en viu) · Posicions del compte.")
     elif use_t212:
-        st.caption("Font: SQLite · compte T212 (el portfolio endpoint no és disponible en mode demo).")
+        st.caption("Font: SQLite · el compte T212 no retorna posicions obertes en mode demo.")
     _render_positions(
         bots_subset, positions_df, floor,
         ibkr_portfolio_df=ibkr_portfolio if use_ibkr else None,

@@ -230,7 +230,21 @@ def match_ticker(
     if isin and isin in by_isin:
         return by_isin[isin]
 
-    # 2. Symbol match
+    # 2. Symbol match (fallback when ISIN unavailable)
+    # Warn for non-US tickers: yfinance often returns isin=None for European stocks,
+    # and bare-symbol matching can silently map to the wrong instrument.
+    # Example: TTE.PA matched ERFp_EQ (Eurofins) instead of FPp_EQ (TotalEnergies).
+    # Always verify symbol-matched EU tickers and add confirmed entries to
+    # data/t212_instruments_override.json.
+    is_eu_ticker = "." in yf_ticker
+    if is_eu_ticker and not isin:
+        log.warning(
+            "  %s: ISIN unavailable — falling back to bare-symbol match. "
+            "EU ticker symbol matches can be WRONG (e.g. TTE≠TTE on T212). "
+            "Verify and add to %s if incorrect.",
+            yf_ticker, OVERRIDE_FILE,
+        )
+
     bare = _bare_symbol(yf_ticker)
     candidates = by_symbol.get(bare, [])
     if not candidates:

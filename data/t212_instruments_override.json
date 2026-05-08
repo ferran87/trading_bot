@@ -1,0 +1,10 @@
+{
+  "TTE.PA": {
+    "t212_ticker": "FPp_EQ",
+    "isin": "FR0000120271",
+    "name": "TTE",
+    "currency": "EUR",
+    "type": "STOCK",
+    "_note": "TotalEnergies rebranded from Total (FP) in 2021; T212 still uses the legacy FPp_EQ ticker internally."
+  }
+}

@@ -1,5 +1,16 @@
 # Trading Bot — Project Plan
 
+> ⚠️ **AI NOTE — read before using this document:**
+> The **file tree** below is aspirational and does **not** reflect the current repo.
+> The **bot list** (bots 1–3) is outdated — the live system has 12+ bot rows; only
+> bots 7 and 10 are currently enabled. The **broker list** is incomplete — T212 is
+> now a fully implemented third backend.
+>
+> Use **[AGENTS.md](AGENTS.md)** and **[docs/CONTEXT_FOR_AI.md](docs/CONTEXT_FOR_AI.md)**
+> as the authoritative source of truth for current bots, strategies, and stack.
+> This document is useful **only** for historical context on guardrails, capital model,
+> and phase decisions.
+
 ## Status snapshot (read this first)
 
 The **critical file tree** in this document comes from the **original brief** and is **aspirational / partially outdated**. The live repo uses **`ib_async`** (not `ib_insync`) for IBKR, includes `scripts/`, `tests/`, `docs/`, and additional strategies (for example **`aggressive_momentum`**, **`sharp_dip`**) beyond the three filenames in the tree. For **current** stack, bots, and pitfalls, use **[AGENTS.md](AGENTS.md)** and **[docs/CONTEXT_FOR_AI.md](docs/CONTEXT_FOR_AI.md)**.

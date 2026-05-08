@@ -1,10 +1,37 @@
 """Broker abstraction.
 
-- `BrokerInterface`  : protocol all brokers implement.
-- `MockBroker`       : fills at `ref_price_eur` + configured slippage, computes
-                       fee from `settings.yaml` fee table by venue.
-- `IBKRBroker`       : paper trading via `ib_async`, contracts from
-                       `data/contracts.json`, fills + commission converted to EUR.
+- `BrokerInterface`     : protocol all brokers implement.
+- `MockBroker`          : fills at `ref_price_eur` + configured slippage; fee from
+                          `settings.yaml` fee table by venue.
+- `IBKRBroker`          : paper/live trading via `ib_async`; contracts from
+                          `data/contracts.json`; fills + commission converted to EUR.
+- `Trading212Broker`    : REST API trading via Trading 212; instrument map from
+                          `data/t212_instruments.json`; fills polled for 120 seconds.
+
+Three broker models — key differences at a glance
+--------------------------------------------------
+Property              MockBroker          IBKRBroker                Trading212Broker
+--------------------  ------------------  ------------------------  --------------------------
+Ticker input          yfinance as-is      yfinance → contracts.json yfinance → t212_instruments.json
+Fill timing           Immediate           5-second poll; pending    120-second poll; pending on
+                                          on PreSubmitted/timeout   NEW status at timeout
+Pending fills?        Never               Yes                       Yes
+Qty rounding          Allows floats       Floors to whole shares    Floors to whole shares
+Fill price currency   Input currency      Local ccy → EUR in fill   Local ccy → EUR at fill
+Fees                  settings.yaml table IB commission             T212 taxes array (may be empty
+                                                                    in demo; falls back to 0.15% FX)
+Required data file    None                data/contracts.json       data/t212_instruments.json
+
+Pending fills (IBKR + T212)
+----------------------------
+`broker.place_market_order()` returns `Fill(is_pending=True)` when the order has not
+yet been confirmed at timeout. `executor.run_orders()` logs these but does NOT call
+`Portfolio.apply_fill()` — the virtual book is left unchanged. On the next bot run,
+`_resolve_pending_orders_all_bots()` in `core/runner.py` polls for completion and
+applies the fill retroactively. MockBroker never returns a pending fill.
+
+EU orders on T212 commonly return HTTP 404 for the first ~10 polls right after
+creation — this is normal T212 API behavior, not an error.
 """
 from __future__ import annotations
 
@@ -618,8 +645,14 @@ class Trading212Broker:
         currency = info.get("currency", cash_block.get("currencyCode", "EUR"))
         return {"cash_eur": free, "total_eur": total, "currency": currency}
 
-    def _fetch_total_deposited(self) -> float:
+    def _fetch_total_deposited(self, since_date: date | None = None) -> float:
         """Return net EUR deposited into this T212 account (deposits − withdrawals).
+
+        Args:
+            since_date: If set, only count transactions whose date is on or after
+                this date.  Used for live bots whose pre-existing manual portfolio
+                deposits must not be included in the bot's budget.
+                None = count all deposits (default for paper bots).
 
         Paginates through the full transaction history so additional deposits made
         after the bot started are automatically picked up.  This is the correct
@@ -637,10 +670,27 @@ class Trading212Broker:
             items = data.get("items", data) if isinstance(data, dict) else data
             for tx in items:
                 tx_type = tx.get("type", "").upper()
-                amount  = float(tx.get("amount", 0))
+                if tx_type not in ("DEPOSIT", "WITHDRAWAL"):
+                    continue
+                # Date filtering: try common T212 date field names
+                if since_date is not None:
+                    raw_date = (
+                        tx.get("dateModified")
+                        or tx.get("date")
+                        or tx.get("timestamp")
+                        or tx.get("createdAt")
+                    )
+                    if raw_date:
+                        try:
+                            tx_date = date.fromisoformat(str(raw_date)[:10])
+                            if tx_date < since_date:
+                                continue  # deposit predates the bot — skip
+                        except (ValueError, TypeError):
+                            pass  # can't parse date — include conservatively
+                amount = float(tx.get("amount", 0))
                 if tx_type == "DEPOSIT":
                     deposited += amount
-                elif tx_type == "WITHDRAWAL":
+                else:
                     deposited -= amount
             next_path = data.get("nextPagePath") if isinstance(data, dict) else None
             path = next_path  # None → loop exits

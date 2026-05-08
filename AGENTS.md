@@ -15,15 +15,25 @@ Read this file first for work in **this repository**. Prefer it over loading the
 
 ## Bot status (truth table)
 
-`STRATEGY_REGISTRY` lives in [`core/runner.py`](core/runner.py). Keys must match `strategy:` on each bot in [`config/strategies.yaml`](config/strategies.yaml).
+`STRATEGY_REGISTRY` lives in [`core/runner.py`](core/runner.py). Keys must match `strategy:` in [`config/strategies.yaml`](config/strategies.yaml). **Update this table whenever bots are added, removed, or toggled.**
 
-| Bot id | YAML `strategy` | Registered | Typical module |
-|--------|-----------------|-------------|----------------|
-| 1 | `aggressive_momentum` | Yes | `strategies/aggressive_momentum.py` |
-| 2 | `mean_reversion` | Yes | `strategies/mean_reversion.py` |
-| 3 | `sharp_dip` | Yes | `strategies/sharp_dip.py` |
-| — | `etf_momentum` | Yes (no default bot row) | `strategies/etf_momentum.py` |
-| — | `news_sentiment` | **Not** in registry (comment placeholder) | Phase 3 |
+Currently enabled bots (as of 2026-05-06):
+
+| Bot id | Name | Strategy | Mode | Owner | Enabled |
+|--------|------|----------|------|-------|---------|
+| 7 | RSI Compounder (Ferran) — Paper | `rsi_compounder` | paper | Ferran | ✅ |
+| 10 | Trend Momentum (Ferran) — Paper | `trend_momentum` | paper | Ferran | ✅ |
+| 17 | RSI Compounder (Ferran) — Live | `rsi_compounder` | live | Ferran | ❌ toggle from dashboard |
+| 20 | Trend Momentum (Ferran) — Live | `trend_momentum` | live | Ferran | ❌ toggle from dashboard |
+| 8, 9 | RSI Compounder (Adria / Antonio) | `rsi_compounder` | paper | Adria, Antonio | ❌ pending Gateway |
+| 11, 12 | Trend Momentum (Adria / Antonio) | `trend_momentum` | paper | Adria, Antonio | ❌ pending Gateway |
+| 18, 19 | RSI Compounder (Adria / Antonio) — Live | `rsi_compounder` | live | Adria, Antonio | ❌ |
+| 21, 22 | Trend Momentum (Adria / Antonio) — Live | `trend_momentum` | live | Adria, Antonio | ❌ |
+| 1–6 | Legacy bots | various | paper | — | ❌ disabled |
+
+All 9 strategies are registered in `STRATEGY_REGISTRY`. `news_sentiment` is the only exception — YAML stub exists, not yet wired (Phase 3).
+
+Broker backends: `BROKER_BACKEND=mock | ibkr | t212`
 
 To add a strategy: implement under `strategies/`, register in `STRATEGY_REGISTRY`, add a `strategies:` YAML block and optional `bots:` row.
 
@@ -63,6 +73,9 @@ streamlit run dashboard/app.py
 - **EU ETF market orders** on weekends or when the exchange is closed: orders may **not fill** within `IBKR_ORDER_TIMEOUT_SEC`; broker cancels on timeout. Prefer **RTH weekdays** for IBKR smoke tests, or `BROKER_BACKEND=mock`.
 - **`python-dotenv`** loads `.env`; a **shell `BROKER_BACKEND` env var overrides** `.env` — clear it if the wrong backend is used.
 - **ETF momentum** (`etf_momentum`) normally rebalances **Monday only**; `--force-rebalance` bypasses that for manual runs (see `main.py` / `StrategyContext`).
+- **T212 broker (`BROKER_BACKEND=t212`):** requires `data/t212_instruments.json` built by `scripts/resolve_t212_instruments.py`. Paper bots share one T212 demo account; capital is divided equally among all enabled paper bots. Live bots use per-bot deposit isolation via `live_capital_since` on the `Bot` DB row.
+- **EU ticker instrument mapping (T212):** yfinance → T212 uses ISIN first; bare-symbol fallback can mis-map EU tickers. Always verify via `data/t212_instruments_override.json`. Known case: `TTE.PA → FPp_EQ` (TotalEnergies legacy T212 ticker — T212 kept the old "FP" symbol after the 2021 rebrand).
+- **Supabase DDL:** never run `ALTER TABLE` via the pooler `DATABASE_URL`. Run DDL directly in the Supabase SQL Editor (project `mfrngzrzwxuygfyjektg`). Pooler connections get statement timeout on DDL.
 
 ## Where to read more
 
@@ -77,3 +90,18 @@ streamlit run dashboard/app.py
 - Match existing style; type hints on new functions.
 - Run **`pytest tests/ -q`** before declaring done.
 - Keep changes scoped; do not expand unrelated bots unless asked.
+
+## Before declaring a task done
+
+If the task involved any of the following, update the corresponding context files:
+
+| Change type | Files to update |
+|-------------|----------------|
+| New / removed / toggled bot | `AGENTS.md` bot table, `docs/CONTEXT_FOR_AI.md` active bots section |
+| New broker backend or env var | `docs/CONTEXT_FOR_AI.md` env var table, `core/config.py` docstring |
+| New architectural decision or non-obvious invariant | `docs/DECISIONS.md` (add a new entry) |
+| New strategy wired / unwired | `AGENTS.md` bot table |
+| Discovery of a gotcha, bug root cause, or persistent constraint | `docs/DECISIONS.md` + `memory/MEMORY.md` |
+| Capital model change | `docs/DECISIONS.md` + `docs/CONTEXT_FOR_AI.md` |
+
+At the end of any session where you made a discovery that would save tokens next session, add a 2–3 line entry to `memory/MEMORY.md`. The PostToolUse hook in `.claude/settings.json` will remind you automatically when high-impact files are edited.
