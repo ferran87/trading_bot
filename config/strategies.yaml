@@ -89,6 +89,7 @@ bots:
     enabled: false
     owner: Ferran
     ibkr_port: 4001         # IBKR default live Gateway port (to be configured)
+    live_capital_since: 2026-05-06  # only deposits from this date count as bot capital
 
   - id: 20
     name: Trend Momentum (Ferran) — Live
@@ -97,6 +98,7 @@ bots:
     enabled: false
     owner: Ferran
     ibkr_port: 4001
+    live_capital_since: 2026-05-06  # only deposits from this date count as bot capital
 
   - id: 21
     name: Trend Momentum (Adria) — Live
@@ -279,6 +281,7 @@ strategies:
     max_days_held: 60                 # exit if never profitable after 60 days
     max_concurrent: 10
     per_position_pct: 0.10            # 10% per position × 10 slots = 100% max invested
+    earnings_blackout_days: 7         # skip entries within 7 calendar days of earnings
 
   news_sentiment:
     universe: [stocks_us, stocks_eu]

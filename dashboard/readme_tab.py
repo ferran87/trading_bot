@@ -136,15 +136,15 @@ com identifiquem el tipus de mercat i com funciona cada bot.
     with col1:
         with st.container(border=True):
             st.markdown("**Broker**")
-            st.markdown("**Interactive Brokers (IBKR)**")
+            st.markdown("**Trading 212**")
             st.caption(
-                "Un dels brokers amb les comissions més baixes del món. "
-                "Accés directe a borses europees i americanes."
+                "Broker europeu sense comissions per a accions i ETFs. "
+                "Accés directe a borses europees i americanes via API REST."
             )
     with col2:
         with st.container(border=True):
             st.markdown("**Compte**")
-            st.markdown("**Paper Trading — $1.000.000**")
+            st.markdown("**Paper Trading — €50.000**")
             st.caption(
                 "Diners virtuals per validar les estratègies sense risc real. "
                 "Quan estiguem satisfets, podem passar al compte de diners reals."
@@ -155,13 +155,13 @@ com identifiquem el tipus de mercat i com funciona cada bot.
             st.markdown("**Automàtica · Diària**")
             st.caption(
                 "El bot s'executa cada dia laborable abans de l'obertura del mercat. "
-                "Les ordres es col·loquen automàticament via IBKR Gateway."
+                "Les ordres es col·loquen automàticament via Trading 212 API."
             )
 
     st.markdown("""
 **Com funciona el pressupost virtual?**
-El compte IBKR és compartit, però cada bot té el seu propi *pressupost virtual*
-de **$500.000** (50% del total cadascun). Cada bot gestiona el seu propi efectiu
+El compte Trading 212 és compartit, però cada bot té el seu propi *pressupost virtual*
+de **€25.000** (50% del total cadascun). Cada bot gestiona el seu propi efectiu
 i les seves pròpies posicions, de manera que el rendiment de cada estratègia és
 mesurable per separat.
 """)
@@ -235,9 +235,9 @@ mesurable per separat.
             st.markdown("**Baixada moderada**")
             st.caption("RSI < 50 o Drawdown 5–15%")
             st.markdown(
-                "Pullback dins una tendència alcista. "
+                "Retrocés dins una tendència alcista. "
                 "El Trend Momentum captura el rebot. "
-                "El RSI Compounder roman en cash."
+                "El RSI Compounder roman en efectiu."
             )
 
     with r3:
@@ -314,7 +314,7 @@ No és un bot actiu: pot estar mesos en efectiu fins que es dóna el moment adeq
         with st.container(border=True):
             st.markdown("**⚠️ Limitacions:**")
             st.markdown("""
-- Pot estar molts mesos en cash durant mercats alcistes
+- Pot estar molts mesos en efectiu durant mercats alcistes
 - Si el crash dura molt (BEAR prolongat), pot acumular pèrdues
 - Requereix paciència — no és un bot de rotació ràpida
 """)
@@ -327,7 +327,7 @@ No és un bot actiu: pot estar mesos en efectiu fins que es dóna el moment adeq
     left, right = st.columns([3, 2])
     with left:
         st.markdown("""
-**Filosofia:** *Compra el pull-back dins d'una tendència alcista.*
+**Filosofia:** *Compra el retrocés dins d'una tendència alcista.*
 
 Aquest bot opera quan el mercat va bé. Busca accions que estan en tendència
 alcista però que han tingut una correcció moderada (un "respir"). Entra en el
@@ -340,7 +340,7 @@ moment en què la tendència es reprèn.
    global positiva.
 2. **Acció en tendència:** preu de l'acció per sobre de la seva **SMA50** — tendència
    individual positiva.
-3. **Pull-back moderat:** RSI de l'acció entre **40 i 62** — ha baixat però no
+3. **Retrocés moderat:** RSI de l'acció entre **40 i 62** — ha baixat però no
    ha entrat en territori de pànic.
 4. **Momentum recuperant:** RSI actual més alt que fa **3 dies** — la correcció
    s'ha aturat i el comprador torna.
@@ -371,7 +371,7 @@ moment en què la tendència es reprèn.
             st.markdown("""
 - No opera durant crashes (el mercat cau per sota de la SMA200)
 - En mercats laterals pot entrar i sortir massa (whipsaw)
-- Menys efectiu en períodes de molta volatilitat
+- Menys eficaç en períodes de molta volatilitat
 """)
 
     st.divider()
@@ -392,25 +392,25 @@ exactament quan l'altre no opera.
                 unsafe_allow_html=True,
             )
             st.markdown("🤖 RSI Compounder **ACTIU**")
-            st.markdown("📈 Trend Momentum en cash")
+            st.markdown("📈 Trend Momentum en efectiu")
 
     with c2:
         with st.container(border=True):
             st.markdown("🟡 **CORRECCIÓ**")
-            st.markdown("🤖 RSI Compounder en cash")
+            st.markdown("🤖 RSI Compounder en efectiu")
             st.markdown("📈 Trend Momentum **ACTIU**")
 
     with c3:
         with st.container(border=True):
             st.markdown("🟢 **BULL**")
-            st.markdown("🤖 RSI Compounder en cash")
+            st.markdown("🤖 RSI Compounder en efectiu")
             st.markdown("📈 Trend Momentum **ACTIU**")
 
     with c4:
         with st.container(border=True):
             st.markdown("⬛ **BEAR**")
-            st.markdown("🤖 RSI Compounder en cash")
-            st.markdown("📈 Trend Momentum en cash")
+            st.markdown("🤖 RSI Compounder en efectiu")
+            st.markdown("📈 Trend Momentum en efectiu")
             st.caption("Ambdós protegeixen capital")
 
     st.markdown("")
@@ -440,9 +440,9 @@ Els resultats detallats dels backtests es poden consultar a la pestanya **📊 B
 
     with st.expander("Puc perdre diners reals?"):
         st.markdown("""
-**Ara mateix, no.** Estem operant amb un compte de *paper trading* (diners virtuals).
+**Ara mateix, no.** Estem operant amb el compte de *pràctica* de Trading 212 (diners virtuals).
 Tot funciona igual que un compte real, però les operacions no afecten diners reals.
-Quan tinguem confiança en els resultats, decidirem conjuntament si passem a compte real.
+Quan tinguem confiança en els resultats, decidirem conjuntament si passem al compte d'inversió real.
 """)
 
     with st.expander("Qui controla el bot? Puc aturar-lo?"):
@@ -452,17 +452,21 @@ El bot l'administra en Ferran. Qualsevol de vosaltres pot:
 - **Canviar l'estratègia** des de la pestanya Paper o En Viu (selector d'estratègia).
 - **Deshabilitar el trading en viu** des de l'interruptor de la pestanya En Viu.
 
-Si hi ha qualsevol problema, parleu-ho directament amb en Ferran.
+Les ordres es col·loquen directament al compte de Trading 212 via API. Si hi ha
+qualsevol problema, parleu-ho directament amb en Ferran.
 """)
 
     with st.expander("Com es calculen les comissions?"):
         st.markdown("""
-IBKR cobra comissions per cada operació executada. Per a accions europees
-(Xetra), la comissió és d'aproximadament **€1,25 per operació** + 0,05% del
-valor. Per a accions americanes, ~**$1,00** per operació.
+Trading 212 **no cobra comissions** per a accions i ETFs. El cost real ve de
+la conversió de divises quan operem accions americanes (en USD):
 
-Al dashboard, la pestanya de *Operacions IBKR* mostra les **comissions reals**
-carregades per IBKR per a cada transacció — no una estimació, sinó el cost real.
+- **Accions europees (EUR):** cost **0 €** per operació.
+- **Accions americanes (USD):** **0,15%** del valor de l'operació per la
+  conversió EUR → USD. Per exemple, una operació de €10.000 en AAPL costa ~€15.
+
+Al dashboard, les comissions mostrades reflecteixen aquesta taxa de conversió,
+extreta directament de la resposta de l'API de Trading 212.
 """)
 
     with st.expander("Amb quina freqüència opera el bot?"):
@@ -471,7 +475,7 @@ El bot s'executa **una vegada al dia**, típicament al matí abans de l'obertura
 dels mercats europeus (09:00–09:30 CET). Analitza totes les accions de l'univers
 i col·loca les ordres que compleixen les condicions.
 
-En règims de calma (BULL sense pull-backs significatius), pot passar dies o
+En règims de calma (BULL sense correccions significatives), pot passar dies o
 setmanes sense operar. En moments de crash, pot entrar en diverses posicions
 el mateix dia.
 """)

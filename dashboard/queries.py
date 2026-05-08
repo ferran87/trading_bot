@@ -12,28 +12,37 @@ log = logging.getLogger(__name__)
 from core.db import Bot, EquitySnapshot, Position, RunLog, Trade, get_session
 
 
+_BOTS_COLUMNS = [
+    "id", "name", "strategy", "initial_eur", "enabled",
+    "owner", "trading_mode", "ibkr_port", "ibkr_port_paper",
+]
+
+
 @st.cache_data(ttl=30)
 def _load_bots() -> pd.DataFrame:
     from core.config import CONFIG
     bot_cfgs = {b["id"]: b for b in CONFIG.strategies.get("bots", [])}
     with get_session() as s:
         rows = s.query(Bot).order_by(Bot.id).all()
-        return pd.DataFrame(
-            [
-                {
-                    "id": b.id,
-                    "name": b.name,
-                    "strategy": b.strategy,
-                    "initial_eur": b.initial_capital_eur,
-                    "enabled": bool(b.enabled),
-                    "owner": b.owner or f"Bot {b.id}",
-                    "trading_mode": getattr(b, "trading_mode", "paper"),
-                    "ibkr_port": bot_cfgs.get(b.id, {}).get("ibkr_port"),
-                    "ibkr_port_paper": bot_cfgs.get(b.id, {}).get("ibkr_port_paper"),
-                }
-                for b in rows
-            ]
-        )
+        data = [
+            {
+                "id": b.id,
+                "name": b.name,
+                "strategy": b.strategy,
+                "initial_eur": b.initial_capital_eur,
+                "enabled": bool(b.enabled),
+                "owner": b.owner or f"Bot {b.id}",
+                "trading_mode": getattr(b, "trading_mode", "paper"),
+                "ibkr_port": bot_cfgs.get(b.id, {}).get("ibkr_port"),
+                "ibkr_port_paper": bot_cfgs.get(b.id, {}).get("ibkr_port_paper"),
+            }
+            for b in rows
+        ]
+        # Return an empty DataFrame with correct columns when the DB has no bots
+        # (e.g. fresh Streamlit Cloud deploy before --init-db has been run).
+        if not data:
+            return pd.DataFrame(columns=_BOTS_COLUMNS)
+        return pd.DataFrame(data)
 
 
 def _set_owner_mode_strategies(
@@ -104,24 +113,35 @@ def _reconcile_cached(bot_ids: tuple[int, ...], ibkr_port: int) -> list[dict]:
                  "sqlite_qty": 0, "ibkr_qty": 0, "error": str(exc)}]
 
 
+_EQUITY_COLUMNS    = ["bot_id", "date", "cash", "positions", "total"]
+_POSITIONS_COLUMNS = ["bot_id", "ticker", "nom", "quantitat", "preu_entrada_eur",
+                      "cost_eur", "data_entrada", "senyal_entrada"]
+_TRADES_COLUMNS    = ["bot_id", "data", "ticker", "nom", "operació", "quantitat",
+                      "preu_eur", "total_eur", "comissió_eur", "senyal", "estat"]
+_RUNLOG_COLUMNS    = ["bot_id", "bot", "data_execució", "data_mercat", "tipus",
+                      "compres", "vendes", "rebutjades", "decisió", "explicació"]
+_CLOSED_COLUMNS    = ["bot_id", "ticker", "nom", "data_entrada", "data_sortida",
+                      "dies", "quantitat", "preu_entrada", "preu_sortida", "P&L €", "P&L %"]
+
+
 @st.cache_data(ttl=30)
 def _equity_history() -> pd.DataFrame:
     with get_session() as s:
         rows = s.query(EquitySnapshot).order_by(EquitySnapshot.snap_date).all()
-        df = pd.DataFrame(
-            [
-                {
-                    "bot_id": r.bot_id,
-                    "date": r.snap_date,
-                    "cash": r.cash_eur,
-                    "positions": r.positions_value_eur,
-                    "total": r.total_eur,
-                }
-                for r in rows
-            ]
-        )
-        if not df.empty:
-            df["date"] = pd.to_datetime(df["date"]).dt.normalize()
+        data = [
+            {
+                "bot_id": r.bot_id,
+                "date": r.snap_date,
+                "cash": r.cash_eur,
+                "positions": r.positions_value_eur,
+                "total": r.total_eur,
+            }
+            for r in rows
+        ]
+        if not data:
+            return pd.DataFrame(columns=_EQUITY_COLUMNS)
+        df = pd.DataFrame(data)
+        df["date"] = pd.to_datetime(df["date"]).dt.normalize()
         return df
 
 
@@ -235,6 +255,8 @@ def _open_positions() -> pd.DataFrame:
     names = _asset_names()
     with get_session() as s:
         positions = s.query(Position).all()
+        if not positions:
+            return pd.DataFrame(columns=_POSITIONS_COLUMNS)
         # Fetch first BUY trade per (bot_id, ticker) for the entry signal reason.
         from sqlalchemy import func
         first_buy_ids = (
@@ -265,7 +287,7 @@ def _open_positions() -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def _closed_positions() -> pd.DataFrame:
+def _closed_positions() -> pd.DataFrame:  # noqa: C901
     """Compute closed-position P&L from the trades ledger.
 
     For each (bot_id, ticker) that has at least one SELL trade, reconstructs
@@ -330,9 +352,10 @@ def _closed_positions() -> pd.DataFrame:
                 "P&L %":          f"{pl_pct:+.1f}%",
             })
 
+    if not rows:
+        return pd.DataFrame(columns=_CLOSED_COLUMNS)
     df = pd.DataFrame(rows)
-    if not df.empty:
-        df = df.sort_values("data_sortida", ascending=False).reset_index(drop=True)
+    df = df.sort_values("data_sortida", ascending=False).reset_index(drop=True)
     return df
 
 
@@ -343,24 +366,25 @@ def _trades(limit: int = 500) -> pd.DataFrame:
         rows = (
             s.query(Trade).order_by(Trade.timestamp.desc()).limit(limit).all()
         )
-        return pd.DataFrame(
-            [
-                {
-                    "bot_id": t.bot_id,
-                    "data": t.timestamp,
-                    "ticker": t.ticker,
-                    "nom": names.get(t.ticker, t.ticker),
-                    "operació": t.side,
-                    "quantitat": t.qty,
-                    "preu_eur": round(t.price_eur, 2),
-                    "total_eur": round(t.qty * t.price_eur, 2),
-                    "comissió_eur": round(t.fee_eur, 2),
-                    "senyal": t.signal_reason,
-                    "estat": getattr(t, "status", "filled"),  # "filled" | "pending"
-                }
-                for t in rows
-            ]
-        )
+        data = [
+            {
+                "bot_id": t.bot_id,
+                "data": t.timestamp,
+                "ticker": t.ticker,
+                "nom": names.get(t.ticker, t.ticker),
+                "operació": t.side,
+                "quantitat": t.qty,
+                "preu_eur": round(t.price_eur, 2),
+                "total_eur": round(t.qty * t.price_eur, 2),
+                "comissió_eur": round(t.fee_eur, 2),
+                "senyal": t.signal_reason,
+                "estat": getattr(t, "status", "filled"),
+            }
+            for t in rows
+        ]
+        if not data:
+            return pd.DataFrame(columns=_TRADES_COLUMNS)
+        return pd.DataFrame(data)
 
 
 @st.cache_data(ttl=60)
@@ -373,23 +397,24 @@ def _run_logs(limit: int = 100) -> pd.DataFrame:
             .limit(limit)
             .all()
         )
-        return pd.DataFrame(
-            [
-                {
-                    "bot_id": r.RunLog.bot_id,
-                    "bot": r.name,
-                    "data_execució": r.RunLog.timestamp,
-                    "data_mercat": r.RunLog.run_date,
-                    "tipus": "🕐 Auto" if (getattr(r.RunLog, "triggered_by", None) or "auto") == "auto" else "👤 Manual",
-                    "compres": r.RunLog.n_buys,
-                    "vendes": r.RunLog.n_sells,
-                    "rebutjades": r.RunLog.n_rejected,
-                    "decisió": r.RunLog.summary,
-                    "explicació": r.RunLog.explanation or "",
-                }
-                for r in rows
-            ]
-        )
+        data = [
+            {
+                "bot_id": r.RunLog.bot_id,
+                "bot": r.name,
+                "data_execució": r.RunLog.timestamp,
+                "data_mercat": r.RunLog.run_date,
+                "tipus": "🕐 Auto" if (getattr(r.RunLog, "triggered_by", None) or "auto") == "auto" else "👤 Manual",
+                "compres": r.RunLog.n_buys,
+                "vendes": r.RunLog.n_sells,
+                "rebutjades": r.RunLog.n_rejected,
+                "decisió": r.RunLog.summary,
+                "explicació": r.RunLog.explanation or "",
+            }
+            for r in rows
+        ]
+        if not data:
+            return pd.DataFrame(columns=_RUNLOG_COLUMNS)
+        return pd.DataFrame(data)
 
 
 @st.cache_data(ttl=60)
@@ -523,4 +548,233 @@ def _ibkr_executions(port: int) -> pd.DataFrame:
         return pd.DataFrame(rows)
     except Exception as exc:
         log.warning("_ibkr_executions: port=%d: %s", port, exc)
+        return pd.DataFrame()
+
+
+# ── T212 live account & portfolio ─────────────────────────────────────────────
+
+def _t212_headers(demo: bool) -> dict | None:
+    """Build the Basic-auth header for T212. Returns None if credentials missing."""
+    import base64
+    import os
+    suffix = "PAPER" if demo else "LIVE"
+    key    = os.environ.get(f"T212_API_KEY_{suffix}", "").strip()
+    secret = os.environ.get(f"T212_API_SECRET_{suffix}", "").strip()
+    if not key or not secret:
+        return None
+    token = base64.b64encode(f"{key}:{secret}".encode()).decode()
+    return {"Authorization": f"Basic {token}"}
+
+
+@st.cache_data(ttl=300)
+def _t212_total_deposited(demo: bool) -> float:
+    """Return the net EUR deposited into the T212 account (deposits − withdrawals).
+
+    Paginates through the full transaction history.  TTL=300s (5 min) because
+    deposits are rare — no need to hit the API on every page refresh.
+    Returns 0.0 if credentials are missing or the API is unreachable.
+    """
+    import requests
+    headers = _t212_headers(demo)
+    if not headers:
+        return 0.0
+    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
+    deposited = 0.0
+    url: str | None = f"{base}/api/v0/history/transactions"
+    try:
+        while url:
+            resp = requests.get(url, headers=headers, timeout=10, params={"limit": 50})
+            resp.raise_for_status()
+            data = resp.json()
+            for tx in data.get("items", []):
+                tx_type = tx.get("type", "").upper()
+                amount  = float(tx.get("amount", 0))
+                if tx_type == "DEPOSIT":
+                    deposited += amount
+                elif tx_type == "WITHDRAWAL":
+                    deposited -= amount
+            next_path = data.get("nextPagePath")
+            url = f"{base}{next_path}" if next_path else None
+    except Exception as exc:
+        log.warning("_t212_total_deposited(demo=%s): %s", demo, exc)
+    return deposited
+
+
+@st.cache_data(ttl=60)
+def _t212_account(demo: bool) -> dict[str, float] | None:
+    """Fetch cash and total equity from T212 /equity/account/summary.
+
+    Returns dict with keys: cash_eur, invested_eur, total_eur.
+    Returns None if credentials are missing or the API is unreachable.
+    """
+    import requests
+    headers = _t212_headers(demo)
+    if not headers:
+        return None
+    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
+    try:
+        resp = requests.get(
+            f"{base}/api/v0/equity/account/summary",
+            headers=headers,
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        cash_block  = data.get("cash", {})
+        inv_block   = data.get("investments", {})
+        total_block = data.get("totalValue", data.get("total", {}))
+        cash  = float(cash_block.get("availableToTrade", cash_block.get("free", 0)))
+        total = float(
+            total_block if isinstance(total_block, (int, float))
+            else total_block.get("amount", cash)
+        )
+        invested         = float(inv_block.get("currentValue", max(total - cash, 0.0)))
+        realized_pnl     = float(inv_block.get("realizedProfitLoss", 0.0))
+        unrealized_pnl   = float(inv_block.get("unrealizedProfitLoss", 0.0))
+        return {
+            "cash_eur":          cash,
+            "invested_eur":      invested,
+            "total_eur":         total,
+            "realized_pnl_eur":  realized_pnl,
+            "unrealized_pnl_eur": unrealized_pnl,
+        }
+    except Exception as exc:
+        log.warning("_t212_account(demo=%s): %s", demo, exc)
+        return None
+
+
+@st.cache_data(ttl=30)
+def _t212_portfolio(demo: bool) -> pd.DataFrame:
+    """Fetch open positions from T212 /equity/portfolio.
+
+    Returns a DataFrame with columns:
+      ticker, qty, avg_cost_eur, market_value_eur, unrealized_pnl_eur, currency
+
+    Returns an empty DataFrame when the account is empty (T212 returns 403 for
+    an empty portfolio — this is expected, not an auth error) or unreachable.
+    """
+    import requests
+    headers = _t212_headers(demo)
+    if not headers:
+        return pd.DataFrame()
+    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
+    try:
+        resp = requests.get(
+            f"{base}/api/v0/equity/portfolio",
+            headers=headers,
+            timeout=10,
+        )
+        if resp.status_code == 403:
+            return pd.DataFrame()   # empty account — not an auth failure
+        resp.raise_for_status()
+        items = resp.json()
+        rows = []
+        for item in items:
+            qty = float(item.get("quantity", 0))
+            rows.append({
+                "ticker":             item.get("ticker", ""),
+                "qty":                qty,
+                "avg_cost_eur":       float(item.get("averagePrice", 0)),
+                "market_value_eur":   float(item.get("currentPrice", 0)) * qty,
+                "unrealized_pnl_eur": float(item.get("ppl", 0)),
+                "currency":           item.get("currency", "EUR"),
+            })
+        return pd.DataFrame(rows)
+    except Exception as exc:
+        log.warning("_t212_portfolio(demo=%s): %s", demo, exc)
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=15)
+def _t212_open_orders(demo: bool) -> pd.DataFrame:
+    """Fetch open (NEW / PENDING_EXECUTION) orders from T212.
+
+    Returns DataFrame with columns:
+      order_id, ticker, operació, quantitat, estat, creat_at
+    Returns empty DataFrame on error or no open orders.
+    """
+    import requests
+    headers = _t212_headers(demo)
+    if not headers:
+        return pd.DataFrame()
+    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
+    try:
+        resp = requests.get(f"{base}/api/v0/equity/orders", headers=headers, timeout=10)
+        resp.raise_for_status()
+        orders = resp.json()
+        rows = []
+        for o in orders:
+            rows.append({
+                "order_id":  o.get("id"),
+                "ticker":    o.get("ticker", ""),
+                "operació":  o.get("side", "BUY"),
+                "quantitat": float(o.get("quantity", 0)),
+                "estat":     o.get("status", ""),
+                "creat_at":  (o.get("createdAt") or "")[:19].replace("T", " "),
+            })
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception as exc:
+        log.warning("_t212_open_orders(demo=%s): %s", demo, exc)
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=30)
+def _t212_order_history(demo: bool, limit: int = 50) -> pd.DataFrame:
+    """Fetch filled order history from T212 /equity/history/orders.
+
+    This is the source of truth for executed prices and fees.  T212 returns
+    a nested structure: each item has an ``order`` block and a ``fill`` block.
+    Fees are in ``fill.walletImpact.taxes``; when absent we estimate from the
+    difference between ``netValue`` and ``qty × price``.
+
+    Returns DataFrame with columns:
+      data, ticker, nom, operació, quantitat, preu_eur, total_eur,
+      comissió_eur, estat, order_id
+    """
+    import requests
+    headers = _t212_headers(demo)
+    if not headers:
+        return pd.DataFrame()
+    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
+    try:
+        resp = requests.get(
+            f"{base}/api/v0/equity/history/orders",
+            headers=headers, timeout=10,
+            params={"limit": limit},
+        )
+        resp.raise_for_status()
+        items = resp.json().get("items", [])
+        rows = []
+        for item in items:
+            order  = item.get("order", {})
+            fill   = item.get("fill", {})
+            wallet = fill.get("walletImpact", {})
+            taxes  = wallet.get("taxes", [])
+
+            qty   = float(fill.get("quantity") or order.get("filledQuantity") or 0)
+            price = float(fill.get("price", 0))
+            net   = float(wallet.get("netValue", qty * price))
+            fx    = float(wallet.get("fxRate", 1) or 1)
+
+            # Fee: sum explicit taxes first; fall back to netValue difference
+            fee = sum(float(t.get("quantity") or t.get("value") or 0) for t in taxes)
+            if fee == 0 and abs(net - qty * price) > 0.001:
+                fee = abs(net - qty * price)
+
+            inst = order.get("instrument", {})
+            rows.append({
+                "data":         (fill.get("filledAt") or order.get("createdAt") or "")[:19].replace("T", " "),
+                "ticker":       order.get("ticker", ""),
+                "nom":          inst.get("name", order.get("ticker", "")),
+                "operació":     order.get("side", ""),
+                "quantitat":    qty,
+                "preu_eur":     round(price * (1 / fx if fx != 1 else 1), 4),
+                "total_eur":    round(net, 2),
+                "comissió_eur": round(fee, 4),
+                "estat":        order.get("status", ""),
+                "order_id":     order.get("id"),
+            })
+        return pd.DataFrame(rows) if rows else pd.DataFrame()
+    except Exception as exc:
+        log.warning("_t212_order_history(demo=%s): %s", demo, exc)
         return pd.DataFrame()

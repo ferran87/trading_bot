@@ -61,9 +61,9 @@ def render_backtest_tab(bots_df: pd.DataFrame, floor: float) -> None:
     today_bt = date.today()
     default_start = today_bt - timedelta(days=90)
     with bt_col2:
-        bt_start = st.date_input("Data inici", value=default_start, max_value=today_bt)
+        bt_start = st.date_input("Data d'inici", value=default_start, max_value=today_bt)
     with bt_col3:
-        bt_end = st.date_input("Data fi", value=today_bt, max_value=today_bt)
+        bt_end = st.date_input("Data final", value=today_bt, max_value=today_bt)
     with bt_col4:
         show_regimes = st.toggle("Mostrar règims", value=True, help="Ressalta els règims de mercat al gràfic d'evolució del patrimoni")
 
@@ -238,7 +238,7 @@ def render_backtest_tab(bots_df: pd.DataFrame, floor: float) -> None:
                     win_rate = winners / len(closed_df) * 100
                     m1, m2, m3 = st.columns(3)
                     m1.metric("P&L realitzat", f"€{realized_pnl:+,.2f}")
-                    m2.metric("Taxa encert", f"{win_rate:.0f}%")
+                    m2.metric("Taxa d'encert", f"{win_rate:.0f}%")
                     m3.metric("Operacions tancades", len(closed_df))
                     cols_closed = ["ticker", "nom", "data_entrada", "data_sortida", "dies",
                                    "accions", "cost_eur", "valor_sortida_eur",

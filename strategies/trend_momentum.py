@@ -37,10 +37,13 @@ Parameters (strategies.yaml)
   max_concurrent         : max open positions (default 10)
   per_position_pct       : position size as fraction of equity (default 0.10)
   min_history_days       : minimum bars required (default 220)
+  earnings_blackout_days : skip entries within this many calendar days of earnings (default 7)
 """
 from __future__ import annotations
 
+import datetime
 import logging
+from functools import lru_cache
 
 import pandas as pd
 
@@ -57,6 +60,45 @@ _CLASS_MAP = {"etf": AssetClass.ETF, "crypto": AssetClass.CRYPTO}
 def _asset_class_for(ticker: str) -> AssetClass:
     cls = CONFIG.watchlists.get("venue", {}).get(ticker, {}).get("class", "stock")
     return _CLASS_MAP.get(cls, AssetClass.STOCK)
+
+
+@lru_cache(maxsize=256)
+def _earnings_dates(ticker: str) -> list[datetime.date]:
+    """Return known upcoming earnings dates for *ticker* via yfinance.
+
+    Results are cached in-process for the lifetime of the bot run (lru_cache).
+    Returns an empty list — never raises — so a yfinance failure is non-blocking.
+    """
+    try:
+        import yfinance as yf
+        cal = yf.Ticker(ticker).calendar
+        if not cal:
+            return []
+        dates = cal.get("Earnings Date", [])
+        # calendar returns datetime.date or list[datetime.date]
+        if isinstance(dates, datetime.date):
+            dates = [dates]
+        return [d for d in dates if isinstance(d, datetime.date)]
+    except Exception as exc:
+        log.debug("_earnings_dates(%s): yfinance error — %s", ticker, exc)
+        return []
+
+
+def _has_earnings_soon(
+    ticker: str,
+    today: datetime.date,
+    window_days: int,
+) -> bool:
+    """Return True if *ticker* has a known earnings date within *window_days* of *today*.
+
+    Checks in both directions: upcoming (pre-earnings) and just-passed (post-earnings gap).
+    A window of 7 days catches same-day releases (market opens before results land),
+    day-after surprises, and the usual analyst-estimate reset period.
+    """
+    for ed in _earnings_dates(ticker):
+        if abs((ed - today).days) <= window_days:
+            return True
+    return False
 
 
 def _sma(close: pd.Series, period: int) -> float | None:
@@ -102,6 +144,7 @@ class TrendMomentumStrategy(Strategy):
         max_concurrent   = int(params.get("max_concurrent", 10))
         per_pos_pct      = float(params.get("per_position_pct", 0.10))
         min_history      = int(params.get("min_history_days", 220))
+        earnings_blackout = int(params.get("earnings_blackout_days", 7))
 
         orders: list[Order] = []
         equity = snapshot.total_eur
@@ -230,6 +273,14 @@ class TrendMomentumStrategy(Strategy):
             # Condition C: RSI momentum — rising vs N days ago
             rsi_n_ago = float(rsi_series.iloc[-rsi_mom_days - 1])
             if rsi_n_ago != rsi_n_ago or rsi_now <= rsi_n_ago:
+                continue
+
+            # Condition D: earnings blackout — skip if earnings within window
+            if _has_earnings_soon(ticker, ctx.today, earnings_blackout):
+                log.info(
+                    "trend_momentum bot=%d SKIP %s — earnings within %d days of %s",
+                    ctx.bot_id, ticker, earnings_blackout, ctx.today,
+                )
                 continue
 
             qty = round(equity * per_pos_pct / price, 4)

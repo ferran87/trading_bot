@@ -34,6 +34,11 @@ from dashboard.queries import (  # noqa: E402
     _run_logs,
     _set_owner_live_enabled,
     _set_owner_mode_strategies,
+    _t212_account,
+    _t212_open_orders,
+    _t212_order_history,
+    _t212_portfolio,
+    _t212_total_deposited,
     _trades,
 )
 
@@ -97,7 +102,7 @@ _STRATEGY_META: dict[str, dict] = {
             "Stop seguidor progressiu: 35% → 20% → 12% a mesura que el RSI puja sobre 70 i 80",
             "Dissenyat per mercats amb crashes en V; espera el moment exacte",
         ],
-        "self_selects": "✅ S'auto-selecciona: roman en cash si no hi ha crash",
+        "self_selects": "✅ S'autoselecciona: roman en efectiu si no hi ha crash",
     },
     "rsi_recovery": {
         "emoji":   "🔄",
@@ -109,7 +114,7 @@ _STRATEGY_META: dict[str, dict] = {
             "Requereix que el mercat en general també hagi caigut",
             "Stop seguidor del 15% els primers 7 dies; s'eixampla al 30% un cop en guanys",
         ],
-        "self_selects": "✅ S'auto-selecciona: roman en cash si no hi ha co-crash",
+        "self_selects": "✅ S'autoselecciona: roman en efectiu si el mercat global tampoc ha caigut",
     },
     "trend_momentum": {
         "emoji":   "📈",
@@ -117,12 +122,12 @@ _STRATEGY_META: dict[str, dict] = {
         "regime":  "Bull markets · Correccions moderades",
         "tagline": "Captura correccions dins de tendències alcistes",
         "points": [
-            "Entra quan el mercat (SXR8.DE) és sobre SMA200 I l'acció és sobre SMA50",
-            "RSI de l'acció entre 40–62 (pull-back moderat) i RSI pujant vs fa 3 dies",
-            "Stop catastròfic -15% · Trailing stop 22% des del pic · Sortida si 3 dies sota SMA50",
+            "Entra quan el mercat (SXR8.DE) és sobre SMA200 i l'acció és sobre SMA50",
+            "RSI de l'acció entre 40–62 (correcció moderada) i RSI més alt que fa 3 dies",
+            "Stop catastròfic -15% · Stop seguidor 22% des del pic · Sortida si 3 dies sota SMA50",
             "Dissenyat per mercats alcistes graduals i correccions del 10-15%",
         ],
-        "self_selects": "⚠️ Actiu durant bull markets, quiet durant crashes",
+        "self_selects": "⚠️ Actiu durant bull markets, inactiu durant els crashes",
     },
 }
 
@@ -174,6 +179,23 @@ def _kpi_with_ibkr(
     """
     kpi = _kpis_for(bot, equity_df, trades_df)
     use_ibkr = CONFIG.broker_backend == "ibkr"
+    use_t212  = CONFIG.broker_backend == "t212"
+
+    if use_t212:
+        # Per-bot KPIs come from the SQLite virtual book (which is per-bot).
+        # T212 account data is account-wide and cannot be split meaningfully
+        # between bots — splitting equally gives identical cards regardless of
+        # what each bot traded.  Only the return_pct baseline is overridden to
+        # use actual deposited capital instead of the settings.yaml default.
+        demo = (mode != "live")
+        t212_deposited = _t212_total_deposited(demo)
+        n = max(n_active_bots, 1)
+        deposit_share = (t212_deposited / n if t212_deposited > 0
+                         else float(bot["initial_eur"]))
+        if deposit_share:
+            kpi["return_pct"] = kpi["total_eur"] / deposit_share - 1.0
+        return kpi
+
     if not use_ibkr:
         return kpi
 
@@ -222,8 +244,7 @@ def _combined_kpis(bots_subset: pd.DataFrame, kpis: dict[int, dict],
     ret      = total / initial_total - 1.0 if initial_total else 0.0
     max_dd   = min(k["max_dd"] for k in kpis.values()) if kpis else 0.0
     unrealized = sum(v["unrealized_pnl_eur"] for v in (live_pnls or {}).values())
-    total_pl   = total - initial_total
-    realized   = total_pl - unrealized
+    realized   = (total - initial_total) - unrealized
     return {
         "total_eur": total, "cash_eur": cash, "invested_eur": invested,
         "return_pct": ret, "max_dd": max_dd, "fees_eur": fees, "n_trades": trades,
@@ -577,7 +598,7 @@ def _render_positions(
             })
 
         if not rows:
-            st.caption("Cap posició oberta a l'account IBKR.")
+            st.caption("Cap posició oberta al compte IBKR.")
             return
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
@@ -627,6 +648,8 @@ def _render_risk_and_trades(
     bots_subset: pd.DataFrame,
     trades_df: pd.DataFrame,
     ibkr_executions_df: pd.DataFrame | None = None,
+    t212_open_orders_df: pd.DataFrame | None = None,
+    t212_history_df: pd.DataFrame | None = None,
 ) -> None:
     left, right = st.columns(2)
     with left:
@@ -645,78 +668,115 @@ def _render_risk_and_trades(
         st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
     with right:
-        # ── Pending orders banner (always shown, regardless of IBKR connection) ─
+        # ── T212 open orders banner ───────────────────────────────────────────
+        use_t212_orders = t212_open_orders_df is not None and not t212_open_orders_df.empty
+        if use_t212_orders:
+            n_ord = len(t212_open_orders_df)
+            ord_text = "ordre pendent" if n_ord == 1 else "ordres pendents"
+            lines = "  \n".join(
+                f"• **{r['ticker']}** {r['quantitat']:.0f} accions — {r['estat']}"
+                f"  _(creada el {r['creat_at']})_"
+                for _, r in t212_open_orders_df.iterrows()
+            )
+            st.warning(
+                f"⏳ **{n_ord} {ord_text} a Trading 212** "
+                "(esperant l'obertura del mercat)\n\n" + lines
+            )
+        else:
+            # ── Pending orders banner from SQLite (IBKR or no live data) ─────
+            active_trades = (
+                trades_df[trades_df["bot_id"].isin(bots_subset["id"])]
+                if not trades_df.empty else trades_df
+            )
+            if not active_trades.empty and "estat" in active_trades.columns:
+                pending = active_trades[active_trades["estat"] == "pending"]
+                if not pending.empty:
+                    n_pend = len(pending)
+                    pend_text = "ordre pendent" if n_pend == 1 else "ordres pendents"
+                    lines = "  \n".join(
+                        f"• **{r['ticker']}** {int(r['quantitat'])} accions"
+                        f" — est. €{r['total_eur']:,.2f}"
+                        for _, r in pending.iterrows()
+                    )
+                    broker_name = "IBKR" if ibkr_executions_df is not None else "broker"
+                    st.warning(
+                        f"⏳ **{n_pend} {pend_text} a {broker_name}** "
+                        "(s'executaran quan el mercat obri)\n\n" + lines
+                    )
+
+    st.divider()
+
+    # ── T212 transaction history (source of truth) ────────────────────────────
+    use_t212_hist = t212_history_df is not None and not t212_history_df.empty
+    if use_t212_hist:
+        st.markdown("#### 📋 Historial d'operacions Trading 212 _(font de veritat)_")
+        st.caption("Preus, quantitats i comissions tal com han quedat registrats a Trading 212.")
+        disp = t212_history_df.copy()
+        disp["estat"] = disp["estat"].map(
+            {"FILLED": "✅ executat", "CANCELLED": "❌ cancel·lat",
+             "REJECTED": "🚫 rebutjat", "NEW": "⏳ pendent"}
+        ).fillna(disp["estat"])
+        disp["comissió_eur"] = disp["comissió_eur"].apply(
+            lambda x: f"€{x:.4f}" if x else "€0.0000"
+        )
+        st.dataframe(
+            disp.drop(columns=["order_id"], errors="ignore"),
+            use_container_width=True, hide_index=True,
+        )
+
+    # ── IBKR executions or SQLite fallback ────────────────────────────────────
+    use_ibkr = ibkr_executions_df is not None and not ibkr_executions_df.empty
+    if use_ibkr:
+        st.markdown("**📋 Operacions IBKR (comissions reals)**")
+        rate = _eur_per_usd()
+        df = ibkr_executions_df.copy()
+
+        def _comm_eur(row: pd.Series) -> float | None:
+            if row["commission"] is None:
+                return None
+            ccy = row.get("comm_currency") or "USD"
+            return row["commission"] * rate if ccy == "USD" else row["commission"]
+
+        df["comm_eur"] = df.apply(_comm_eur, axis=1)
+        agg_rows = []
+        group_col = "order_id" if "order_id" in df.columns else None
+        groups = df.groupby(group_col) if group_col and df[group_col].notna().any() \
+            else [(None, df)]
+        for _, grp in groups:
+            total_qty  = grp["qty"].sum()
+            wavg_price = (grp["qty"] * grp["price"]).sum() / total_qty if total_qty else 0
+            total_comm = grp["comm_eur"].sum() if grp["comm_eur"].notna().any() else None
+            rpnl_vals  = grp["realized_pnl"].dropna()
+            total_rpnl = rpnl_vals.sum() if not rpnl_vals.empty else None
+            ccy        = grp["comm_currency"].dropna().iloc[0] if grp["comm_currency"].notna().any() else "USD"
+            agg_rows.append({
+                "hora":       grp["time"].max(),
+                "ticker":     grp["ticker"].iloc[0],
+                "operació":   grp["side"].iloc[0],
+                "quantitat":  int(total_qty),
+                "preu":       round(wavg_price, 4),
+                "comissió €": f"€{total_comm:.2f}" if total_comm is not None else "—",
+                "P&L tancat": f"€{total_rpnl * rate:+.2f}" if total_rpnl is not None and ccy == "USD"
+                              else (f"€{total_rpnl:+.2f}" if total_rpnl is not None else "—"),
+            })
+        agg_df = pd.DataFrame(agg_rows).sort_values("hora", ascending=False)
+        st.dataframe(agg_df, use_container_width=True, hide_index=True)
+    elif not use_t212_hist:
+        # Only show SQLite log when there's no live broker data at all
         active_trades = (
             trades_df[trades_df["bot_id"].isin(bots_subset["id"])]
             if not trades_df.empty else trades_df
         )
-        if not active_trades.empty and "estat" in active_trades.columns:
-            pending = active_trades[active_trades["estat"] == "pending"]
-            if not pending.empty:
-                lines = "  \n".join(
-                    f"• **{r['ticker']}** {int(r['quantitat'])} accions"
-                    f" — est. €{r['total_eur']:,.2f}"
-                    for _, r in pending.iterrows()
-                )
-                st.warning(
-                    f"⏳ **{len(pending)} ordre(s) pendent(s) a IBKR** "
-                    "(s'executarà quan el mercat obri — reconciliació automàtica demà)\n\n"
-                    + lines
-                )
-
-        use_ibkr = ibkr_executions_df is not None and not ibkr_executions_df.empty
-        if use_ibkr:
-            st.markdown("**📋 Operacions IBKR (comissions reals)**")
-            rate = _eur_per_usd()
-            df = ibkr_executions_df.copy()
-
-            # Convert commission to EUR per fill before aggregation
-            def _comm_eur(row: pd.Series) -> float | None:
-                if row["commission"] is None:
-                    return None
-                ccy = row.get("comm_currency") or "USD"
-                return row["commission"] * rate if ccy == "USD" else row["commission"]
-
-            df["comm_eur"] = df.apply(_comm_eur, axis=1)
-
-            # Aggregate partial fills into one row per order.
-            # Group by order_id (same logical order) → sum qty & commission,
-            # weighted-avg price, latest time.
-            agg_rows = []
-            group_col = "order_id" if "order_id" in df.columns else None
-            groups = df.groupby(group_col) if group_col and df[group_col].notna().any() \
-                else [(None, df)]
-            for _, grp in groups:
-                total_qty    = grp["qty"].sum()
-                wavg_price   = (grp["qty"] * grp["price"]).sum() / total_qty if total_qty else 0
-                total_comm   = grp["comm_eur"].sum() if grp["comm_eur"].notna().any() else None
-                rpnl_vals    = grp["realized_pnl"].dropna()
-                total_rpnl   = rpnl_vals.sum() if not rpnl_vals.empty else None
-                ccy          = grp["comm_currency"].dropna().iloc[0] if grp["comm_currency"].notna().any() else "USD"
-                agg_rows.append({
-                    "hora":       grp["time"].max(),
-                    "ticker":     grp["ticker"].iloc[0],
-                    "operació":   grp["side"].iloc[0],
-                    "quantitat":  int(total_qty),
-                    "preu":       round(wavg_price, 4),
-                    "comissió €": f"€{total_comm:.2f}" if total_comm is not None else "—",
-                    "P&L tancat": f"€{total_rpnl * rate:+.2f}" if total_rpnl is not None and ccy == "USD"
-                                  else (f"€{total_rpnl:+.2f}" if total_rpnl is not None else "—"),
-                })
-
-            agg_df = pd.DataFrame(agg_rows).sort_values("hora", ascending=False)
-            st.dataframe(agg_df, use_container_width=True, hide_index=True)
+        st.markdown("**📋 Registre d'operacions (SQLite)**")
+        if active_trades.empty:
+            st.caption("Encara no hi ha operacions.")
         else:
-            st.markdown("**📋 Registre d'operacions**")
-            if active_trades.empty:
-                st.caption("Encara no hi ha operacions.")
-            else:
-                display = active_trades.drop(columns=["bot_id"], errors="ignore").copy()
-                if "estat" in display.columns:
-                    display["estat"] = display["estat"].map(
-                        {"filled": "✅ executat", "pending": "⏳ pendent", "cancelled": "❌ cancel·lat"}
-                    ).fillna("⚠️ desconegut")
-                st.dataframe(display, use_container_width=True, hide_index=True)
+            display = active_trades.drop(columns=["bot_id"], errors="ignore").copy()
+            if "estat" in display.columns:
+                display["estat"] = display["estat"].map(
+                    {"filled": "✅ executat", "pending": "⏳ pendent", "cancelled": "❌ cancel·lat"}
+                ).fillna("⚠️ desconegut")
+            st.dataframe(display, use_container_width=True, hide_index=True)
 
 
 def _render_run_logs(bots_subset: pd.DataFrame) -> None:
@@ -823,18 +883,25 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     if bots_subset.empty:
         if mode == "live":
             st.info(
-                "El trading en viu està **inactiu**.  \n"
+                "El mode en viu està **inactiu**.  \n"
                 "Activa'l amb el botó de dalt ↑"
             )
         else:
             st.info("Cap bot de paper actiu per a aquest compte.")
         return
 
-    # ── Fetch IBKR live data (once per tab render) ────────────────────────────
+    # ── Fetch live broker data (once per tab render) ──────────────────────────
     use_ibkr = CONFIG.broker_backend == "ibkr"
+    use_t212  = CONFIG.broker_backend == "t212"
+
     ibkr_port = _get_ibkr_port(bots_subset, mode) if use_ibkr else None
     ibkr_portfolio  = _ibkr_portfolio(ibkr_port)  if ibkr_port else pd.DataFrame()
     ibkr_executions = _ibkr_executions(ibkr_port) if ibkr_port else pd.DataFrame()
+
+    t212_demo          = (mode != "live")
+    t212_portfolio     = _t212_portfolio(t212_demo)    if use_t212 else pd.DataFrame()
+    t212_open_orders   = _t212_open_orders(t212_demo)  if use_t212 else pd.DataFrame()
+    t212_order_history = _t212_order_history(t212_demo) if use_t212 else pd.DataFrame()
 
     # ── Strategy info expanders ───────────────────────────────────────────────
     seen: set[str] = set()
@@ -858,16 +925,33 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     # ── Live P&L from current market prices (yfinance) ───────────────────────
     live_pnls = _compute_live_pnl_per_bot(bots_subset, positions_df)
 
-    # In mock mode the KPI total comes from stale equity snapshots; replace it
-    # with cash (always current) + live market value of open positions so the
-    # card matches what the positions table shows.
+    # Replace stale equity-snapshot totals with cash + live yfinance prices.
+    # Applies to mock and T212 (per-bot KPIs both come from the SQLite virtual
+    # book; T212 live account total is shown separately in the account strip).
+    #
+    # IMPORTANT: use Portfolio.cash_eur() (reads from the trades ledger) rather
+    # than kpis[bot_id]["cash_eur"] (from the equity snapshot). The snapshot is
+    # only written at the end of each daily run, so if new positions filled today
+    # the snapshot cash is stale — it hasn't had today's purchases deducted yet.
+    # Reading directly from the trades table always gives the correct current cash,
+    # preventing the snapshot cash + live positions double-count that inflates
+    # "Realitzat" by the cost of same-day fills.
     if not use_ibkr:
+        from core.db import get_session as _get_session
+        from core.portfolio import Portfolio as _Portfolio
+        with _get_session() as _s:
+            fresh_cash: dict[int, float] = {
+                int(bot["id"]): _Portfolio.cash_eur(_s, int(bot["id"]))
+                for _, bot in bots_subset.iterrows()
+            }
         for _, bot in bots_subset.iterrows():
             bot_id = int(bot["id"])
             lpnl = live_pnls.get(bot_id, {})
             live_invested = lpnl.get("live_invested_eur", kpis[bot_id]["invested_eur"])
-            live_total    = kpis[bot_id]["cash_eur"] + live_invested
+            cash          = fresh_cash.get(bot_id, kpis[bot_id]["cash_eur"])
+            live_total    = cash + live_invested
             initial       = float(bot["initial_eur"])
+            kpis[bot_id]["cash_eur"]     = cash
             kpis[bot_id]["invested_eur"] = live_invested
             kpis[bot_id]["total_eur"]    = live_total
             kpis[bot_id]["return_pct"]   = (live_total / initial - 1.0) if initial else 0.0
@@ -893,11 +977,34 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
 
     st.divider()
 
+    # ── T212 live account strip ───────────────────────────────────────────────
+    if use_t212:
+        t212_acc       = _t212_account(t212_demo)
+        t212_deposited = _t212_total_deposited(t212_demo)
+        if t212_acc:
+            total    = t212_acc["total_eur"]
+            pnl_eur  = total - t212_deposited if t212_deposited > 0 else 0.0
+            pnl_pct  = pnl_eur / t212_deposited * 100 if t212_deposited > 0 else 0.0
+            pnl_str  = f"{pnl_pct:+.2f}%"
+            reserved = max(total - t212_acc["cash_eur"] - t212_acc["invested_eur"], 0.0)
+
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("💰 Total compte T212",  f"€{total:,.2f}")
+            c2.metric("📥 Capital dipositat",  f"€{t212_deposited:,.2f}" if t212_deposited else "—")
+            c3.metric("📈 P&L vs dipòsit",     f"€{pnl_eur:+,.2f}", pnl_str,
+                      delta_color="normal" if pnl_eur >= 0 else "inverse")
+            c4.metric("🏦 Efectiu disponible", f"€{t212_acc['cash_eur']:,.2f}")
+            c5.metric("⏳ Reservat per ordres", f"€{reserved:,.2f}")
+
     st.markdown("#### 📂 Posicions obertes")
     if use_ibkr and not ibkr_portfolio.empty:
         st.caption("Font: IBKR Gateway (temps real) · Posicions del bot i manuals.")
     elif use_ibkr:
         st.caption("⚠️ IBKR Gateway no disponible — mostrant SQLite.")
+    elif use_t212 and not t212_portfolio.empty:
+        st.caption("Font: Trading 212 API (en viu) · Posicions del compte.")
+    elif use_t212:
+        st.caption("Font: SQLite · el compte T212 no retorna posicions obertes en mode demo.")
     _render_positions(
         bots_subset, positions_df, floor,
         ibkr_portfolio_df=ibkr_portfolio if use_ibkr else None,
@@ -940,6 +1047,8 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     _render_risk_and_trades(
         bots_subset, trades_df,
         ibkr_executions_df=ibkr_executions if use_ibkr else None,
+        t212_open_orders_df=t212_open_orders if use_t212 else None,
+        t212_history_df=t212_order_history if use_t212 else None,
     )
 
     st.divider()
@@ -988,7 +1097,17 @@ with st.sidebar:
 
     st.divider()
     # ── Force price refresh ───────────────────────────────────────────────────
-    if st.button("🔄 Actualitza preus", help="Buida totes les caches de preus (yfinance + FX)"):
+    btn_label = (
+        "🔄 Actualitza T212 + preus"
+        if CONFIG.broker_backend == "t212"
+        else "🔄 Actualitza preus"
+    )
+    btn_help = (
+        "Buida totes les caches · Obté l'últim estat del compte Trading 212 (posicions, ordres, historial)"
+        if CONFIG.broker_backend == "t212"
+        else "Buida totes les caches de preus (yfinance + FX)"
+    )
+    if st.button(btn_label, help=btn_help):
         import importlib
         import sys
         # Force-reload market_data and fx so any code fixes take effect
@@ -1000,7 +1119,7 @@ with st.sidebar:
         from core import fx as _fx
         _md.clear_cache()
         _fx.clear_cache()
-        st.cache_data.clear()
+        st.cache_data.clear()   # clears T212 caches too (_t212_account, _t212_portfolio, etc.)
         st.rerun()
 
     st.divider()

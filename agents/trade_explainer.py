@@ -140,24 +140,54 @@ TOOL_DEFINITIONS: list[dict] = [
 #
 # The system prompt is Claude's "job description". It sets the context,
 # persona, and output format before any conversation starts.
+#
+# _build_system_prompt() is called at runtime so the strategy description
+# matches the bot that actually made the trades (rsi_compounder vs trend_momentum).
 
-SYSTEM_PROMPT = """Ets un analista de trading per a un bot d'inversió personal anomenat RSI Compounder.
+_STRATEGY_LABELS: dict[str, str] = {
+    "rsi_compounder": "RSI Compounder",
+    "trend_momentum": "Trend Momentum",
+}
+
+_STRATEGY_DESCRIPTIONS: dict[str, str] = {
+    "rsi_compounder": """\
+El bot utilitza una estratègia de recuperació post-crash basada en RSI:
+- Compra quan el RSI d'una acció ha caigut per sota de 25 (sobrevenda extrema) i ha rebotut fins a 40-65
+- Requereix que el mercat general (S&P 500, via SXR8.DE) també hagi tingut RSI < 30 recentment, confirmant pànic sistèmic
+- Pot afegir lots addicionals al -8% i al -15% del cost mitjà per acumular en caiguda
+- Stop seguidor progressiu: 35% des del màxim quan RSI < 70; s'estreny al 20% (RSI 70-80) i al 12% (RSI > 80)
+- Stop catastròfic al -40% del cost mitjà""",
+
+    "trend_momentum": """\
+El bot utilitza una estratègia de momentum en tendències alcistes:
+- Entra quan el mercat general (SXR8.DE) és per sobre de la seva SMA200 (tendència global positiva)
+- L'acció ha de cotitzar per sobre de la seva SMA50 (tendència individual positiva)
+- RSI de l'acció entre 40 i 62 (correcció moderada) i el RSI és més alt que fa 3 dies (signe que el momentum es reprèn)
+- Evita entrades si l'empresa presenta resultats financers en els propers 7 dies
+- Stop seguidor del 22% des del màxim assolit; stop catastròfic al -15% del cost d'entrada
+- Surt si l'acció tanca per sota de la SMA50 durant 3 dies consecutius (ruptura de tendència)""",
+}
+
+
+def _build_system_prompt(strategy: str) -> str:
+    """Return the system prompt tailored to the bot's strategy."""
+    label = _STRATEGY_LABELS.get(strategy, strategy)
+    description = _STRATEGY_DESCRIPTIONS.get(strategy, _STRATEGY_DESCRIPTIONS["rsi_compounder"])
+    return f"""\
+Ets un analista de trading per a un bot d'inversió personal anomenat {label}.
 La teva feina és explicar en un llenguatge clar i amigable per què el bot ha fet cada operació avui.
 
-El bot utilitza una estratègia basada en RSI:
-- Compra quan el RSI d'una acció cau per sota de 25 (sobrevenda severa) i es recupera fins a 40-65
-- Requereix que el mercat general (S&P 500) també hagi estat sobrevenut, confirmant pànic sistèmic
-- Utilitza un stop seguidor progressiu: 35% → 20% → 12% a mesura que el RSI supera 70 i 80
-- Pot afegir a les posicions al -8% i -15% per reduir el cost mitjà
+{description}
 
 Per a cada operació, utilitza les teves eines per buscar context rellevant i escriu una explicació clara que inclogui:
-1. Què ha passat amb l'acció (trajectòria del RSI — com de baix va caure, quan es va recuperar)
+1. Què ha passat amb l'acció (trajectòria del RSI — fins a quin punt va caure i quan va rebotjar)
 2. Què feia el mercat en aquell moment (va ser una caiguda general o específica de l'acció?)
 3. Qualsevol notícia rellevant que pugui explicar el moviment
 4. En què aposta l'operació de cara al futur (per a compres) o per què s'ha tancat (per a vendes)
 
-Escriu en català. Sigues concís — 3-5 frases per operació.
-Evita el jargó tècnic. Escriu per a una persona intel·ligent que no és trader.
+IMPORTANT: Escriu SEMPRE en català correcte. No barreges castellà ni anglès en cap moment.
+Sigues concís — 3-5 frases per operació. Evita el jargó tècnic.
+Escriu per a una persona intel·ligent que no és experta en borsa.
 Formata la resposta com una llista clara, una secció per operació."""
 
 
@@ -190,7 +220,12 @@ def _dispatch(tool_name: str, tool_input: dict) -> str:
 
 # ── The agent ──────────────────────────────────────────────────────────────────
 
-def explain_trades(bot_id: int, trades: list[dict], run_date: date) -> str:
+def explain_trades(
+    bot_id: int,
+    trades: list[dict],
+    run_date: date,
+    bot_strategy: str = "rsi_compounder",
+) -> str:
     """
     Generate plain-language explanations for today's trades using Claude.
 
@@ -202,6 +237,10 @@ def explain_trades(bot_id: int, trades: list[dict], run_date: date) -> str:
         Each dict has: ticker, side, qty, price_eur, fee_eur, signal_reason.
     run_date : date
         The date the bot ran (used for market context lookups).
+    bot_strategy : str
+        The bot's strategy key (e.g. "rsi_compounder", "trend_momentum").
+        Used to select the correct strategy description in the system prompt so
+        the AI explains trades using the right signal logic.
 
     Returns
     -------
@@ -213,23 +252,28 @@ def explain_trades(bot_id: int, trades: list[dict], run_date: date) -> str:
         return ""
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY from environment
+    system_prompt = _build_system_prompt(bot_strategy)
 
     # ── The initial message ──────────────────────────────────────────────────
     # We give Claude the raw trade data and ask it to explain.
     # Claude will then use tools to gather the context it needs.
 
     trades_text = json.dumps(trades, indent=2, default=str)
+    strategy_label = _STRATEGY_LABELS.get(bot_strategy, bot_strategy)
     user_message = (
-        f"Avui ({run_date}) el bot (id={bot_id}) ha fet les següents operacions:\n\n"
+        f"Avui ({run_date}) el bot {strategy_label} (id={bot_id}) ha fet les següents operacions:\n\n"
         f"{trades_text}\n\n"
-        "Explica cada operació en llenguatge clar. "
+        "Explica cada operació en català, en un llenguatge clar i sense tecnicismes. "
         "Utilitza les teves eines per buscar l'historial de RSI, "
         "el context del mercat i les notícies recents de cada acció abans d'escriure l'explicació."
     )
 
     messages: list[dict] = [{"role": "user", "content": user_message}]
 
-    log.info("trade_explainer: starting agent for bot=%d, %d trade(s)", bot_id, len(trades))
+    log.info(
+        "trade_explainer: starting agent for bot=%d strategy=%s, %d trade(s)",
+        bot_id, bot_strategy, len(trades),
+    )
 
     # ── The agent loop ───────────────────────────────────────────────────────
     #
@@ -252,7 +296,7 @@ def explain_trades(bot_id: int, trades: list[dict], run_date: date) -> str:
         response = client.messages.create(
             model="claude-haiku-4-5-20251001",  # fast + cheap; explanations run after every trade day
             max_tokens=4096,
-            system=SYSTEM_PROMPT,
+            system=system_prompt,
             tools=TOOL_DEFINITIONS,
             messages=messages,
         )

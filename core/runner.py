@@ -218,6 +218,11 @@ def _broker_for_bot(bot_id: int, trading_mode: str = "paper") -> "BrokerInterfac
             )
         from core.broker import IBKRBroker
         return IBKRBroker(port=int(ibkr_port))
+    if backend == "t212":
+        from core.broker import Trading212Broker
+        # Demo mode for paper trading; live mode when trading_mode=="live"
+        demo = (trading_mode != "live")
+        return Trading212Broker(demo=demo)
     raise ValueError(f"Unknown BROKER_BACKEND={backend!r}")
 
 
@@ -293,6 +298,95 @@ def _resolve_pending_orders_all_bots() -> None:
             )
 
 
+def _sync_t212_initial_capital(today: date) -> None:
+    """Sync initial_capital_eur for all enabled T212 bots from deposited amounts.
+
+    Paper bots: uses the full account deposit history, split equally.
+
+    Live bots: each bot may have a ``live_capital_since`` date. When set, only
+    deposits made on or after that date are counted. This lets users who already
+    have a manual portfolio activate the bot without their pre-existing capital
+    being included in the bot's budget — only new monthly top-ups are treated
+    as the bot's money.
+
+    Why deposited amount and not current account value:
+      - Current value includes unrealised P&L → return % would read 0% on a
+        fresh run after a good day.
+      - Deposits represent actual capital committed by the user.
+      - New deposits auto-increase initial_capital_eur (and therefore cash_eur),
+        giving the bot more buying power without any manual intervention.
+
+    This runs once per day at the start of run_once() when BROKER_BACKEND=t212.
+    All enabled bots are updated unconditionally so new deposits land immediately.
+    """
+    from core.db import get_session
+
+    try:
+        from core.broker import Trading212Broker
+
+        with get_session() as session:
+            all_bots = session.query(Bot).order_by(Bot.id).all()
+
+            for mode in ("paper", "live"):
+                demo = (mode == "paper")
+                broker = Trading212Broker(demo=demo)
+
+                enabled_bots = [
+                    b for b in all_bots
+                    if b.enabled and getattr(b, "trading_mode", "paper") == mode
+                ]
+                if not enabled_bots:
+                    continue
+
+                for b in enabled_bots:
+                    # Live bots with a since-date get their own filtered deposit total;
+                    # paper bots and live bots without a since-date share the full total.
+                    since = getattr(b, "live_capital_since", None)
+
+                    try:
+                        deposited_eur = broker._fetch_total_deposited(since_date=since)
+                    except Exception as exc:
+                        log.warning(
+                            "_sync_t212_initial_capital: could not fetch T212 %s "
+                            "transaction history for bot=%d: %s",
+                            mode, b.id, exc,
+                        )
+                        continue
+
+                    if deposited_eur <= 0:
+                        log.warning(
+                            "_sync_t212_initial_capital: bot=%d T212 %s deposited=%.2f "
+                            "(since=%s) — skipping",
+                            b.id, mode, deposited_eur, since,
+                        )
+                        continue
+
+                    # For bots without a since-date, split total equally across peers
+                    # (paper bots share the paper account).  For bots with a since-date
+                    # (live bots with their own deposit slice), use the full filtered amount.
+                    if since is None:
+                        n_peers = len(enabled_bots)
+                        per_bot_eur = round(deposited_eur / n_peers, 2)
+                    else:
+                        per_bot_eur = round(deposited_eur, 2)
+
+                    if abs(b.initial_capital_eur - per_bot_eur) > 0.01:
+                        log.info(
+                            "_sync_t212_initial_capital: bot=%d %s mode=%s "
+                            "initial_capital_eur %.2f -> %.2f "
+                            "(deposited=%.2f since=%s)",
+                            b.id, b.name, mode,
+                            b.initial_capital_eur, per_bot_eur,
+                            deposited_eur, since,
+                        )
+                        b.initial_capital_eur = per_bot_eur
+
+                session.commit()
+
+    except Exception as exc:
+        log.warning("_sync_t212_initial_capital failed: %s", exc)
+
+
 def run_once(
     today: date | None = None,
     *,
@@ -313,9 +407,19 @@ def run_once(
     validate_run_dates(today, as_of)
 
     # ── Pre-run: resolve any pending orders from previous sessions ─────────────
-    # Only for IBKR backend; mock needs no reconciliation.
+    # Only for IBKR backend; mock and T212 use REST-based reconciliation
+    # (T212 orders fill synchronously, so there are no "pending" orders to
+    # resolve on startup).
     if CONFIG.broker_backend == "ibkr":
         _resolve_pending_orders_all_bots()
+
+    # ── Pre-run: sync T212 account balance → per-bot initial capital ───────────
+    # For fresh bots (no trades yet) the virtual book cash equals
+    # initial_capital_eur.  Rather than hardcoding this in settings.yaml,
+    # we fetch the live T212 account balance and split it equally among
+    # enabled bots of the same trading mode (paper or live).
+    if CONFIG.broker_backend == "t212":
+        _sync_t212_initial_capital(today)
 
     reports: list[executor.ExecutionReport] = []
     with get_session() as session:
