@@ -113,12 +113,20 @@ def run_backtest(
     bot_id: int,
     start_date: date,
     end_date: date,
+    params_override: dict | None = None,
 ) -> BacktestResult:
     """Simulate `bot_id` day-by-day from `start_date` to `end_date`.
 
     Downloads market data once per ticker (cached) then truncates bars to each
     simulated trading day, so the strategy only sees information available at
     close on that day.
+
+    ``params_override`` (Strategy Lab): when provided, the bot's strategy
+    parameters in ``CONFIG.strategies['strategies'][strategy_name]`` are
+    temporarily updated with these values for the duration of the backtest.
+    The original values are restored afterwards (even on error). This lets the
+    Strategy Critic evaluate "what if rsi_now_above were 45 instead of 40?"
+    without mutating the live YAML.
     """
     # Look up bot from the live DB — avoids stale in-process config cache.
     from core.db import get_session as _get_session
@@ -131,75 +139,100 @@ def run_backtest(
 
     initial_capital = float(CONFIG.settings["guardrails"]["initial_capital_eur"])
 
-    # Isolated in-memory database — live DB is untouched.
-    eng = sa_create_engine("sqlite:///:memory:", future=True)
-    Base.metadata.create_all(eng)
-    SessionLocal = sessionmaker(bind=eng, expire_on_commit=False, future=True)
-
-    with SessionLocal() as s:
-        s.add(
-            Bot(
-                id=bot_id,
-                name=bot_cfg["name"],
-                strategy=bot_cfg["strategy"],
-                initial_capital_eur=initial_capital,
-                enabled=1,
+    # ── Apply temporary param overrides (Strategy Lab) ────────────────────
+    # Snapshot the original strategy params dict before mutating so a finally
+    # block can restore even if the backtest raises.
+    strategy_name = bot_cfg["strategy"]
+    _orig_params: dict | None = None
+    if params_override:
+        try:
+            current = CONFIG.strategies["strategies"][strategy_name]
+        except (KeyError, TypeError):
+            current = None
+        if isinstance(current, dict):
+            _orig_params = dict(current)  # shallow copy is enough — values are scalars
+            current.update(params_override)
+            log.info(
+                "run_backtest: applied %d param override(s) to %s: %s",
+                len(params_override), strategy_name, params_override,
             )
-        )
-        s.commit()
 
-    broker = MockBroker()
-    broker.connect()
-    market_data.clear_cache()
-    fx.clear_cache()
+    try:
+        # Isolated in-memory database — live DB is untouched.
+        eng = sa_create_engine("sqlite:///:memory:", future=True)
+        Base.metadata.create_all(eng)
+        SessionLocal = sessionmaker(bind=eng, expire_on_commit=False, future=True)
 
-    errors: list[str] = []
-    for day in _trading_days(start_date, end_date):
-        broker.sim_date = day  # fill timestamps reflect the simulated date
         with SessionLocal() as s:
-            bot_row = s.query(Bot).filter(Bot.id == bot_id).one()
-            try:
-                from core.runner import run_bot  # lazy import to avoid top-level strategy imports on cloud
-                run_bot(s, broker, bot_row, day, force_rebalance=False, as_of=day)
-                s.commit()
-            except Exception as exc:
-                s.rollback()
-                msg = f"{day}: {exc}"
-                log.warning("backtest bot=%d %s", bot_id, msg)
-                errors.append(msg)
+            s.add(
+                Bot(
+                    id=bot_id,
+                    name=bot_cfg["name"],
+                    strategy=bot_cfg["strategy"],
+                    initial_capital_eur=initial_capital,
+                    enabled=1,
+                )
+            )
+            s.commit()
 
-    # Resolve universe and fetch end-of-backtest prices for open position P&L.
-    params = CONFIG.strategies["strategies"][bot_cfg["strategy"]]
-    uni_spec = params.get("universe", [])
-    universe_tickers: list[str] = []
-    if isinstance(uni_spec, str):
-        universe_tickers = list(CONFIG.watchlists[uni_spec])
-    elif isinstance(uni_spec, list):
-        for grp in uni_spec:
-            universe_tickers.extend(CONFIG.watchlists[grp])
-    aux = params.get("market_filter_ticker")
-    if aux and aux not in universe_tickers:
-        universe_tickers.append(aux)
-    min_hist = int(params.get("min_history_days") or params.get("lookback_days", 70))
-    mkt_sma = int(params.get("market_filter_sma", 0))
-    if mkt_sma:
-        min_hist = max(min_hist, mkt_sma)
-    final_bars = market_data.prefetch_since(universe_tickers, min_hist, as_of=end_date)
-    last_prices = market_data.last_prices_eur(final_bars) if final_bars else {}
+        broker = MockBroker()
+        broker.connect()
+        market_data.clear_cache()
+        fx.clear_cache()
 
-    with SessionLocal() as s:
-        eq_rows = (
-            s.query(EquitySnapshot)
-            .filter(EquitySnapshot.bot_id == bot_id)
-            .order_by(EquitySnapshot.snap_date)
-            .all()
-        )
-        trade_rows = (
-            s.query(Trade)
-            .filter(Trade.bot_id == bot_id)
-            .order_by(Trade.timestamp)
-            .all()
-        )
+        errors: list[str] = []
+        for day in _trading_days(start_date, end_date):
+            broker.sim_date = day  # fill timestamps reflect the simulated date
+            with SessionLocal() as s:
+                bot_row = s.query(Bot).filter(Bot.id == bot_id).one()
+                try:
+                    from core.runner import run_bot  # lazy import to avoid top-level strategy imports on cloud
+                    run_bot(s, broker, bot_row, day, force_rebalance=False, as_of=day)
+                    s.commit()
+                except Exception as exc:
+                    s.rollback()
+                    msg = f"{day}: {exc}"
+                    log.warning("backtest bot=%d %s", bot_id, msg)
+                    errors.append(msg)
+
+        # Resolve universe and fetch end-of-backtest prices for open position P&L.
+        params = CONFIG.strategies["strategies"][bot_cfg["strategy"]]
+        uni_spec = params.get("universe", [])
+        universe_tickers: list[str] = []
+        if isinstance(uni_spec, str):
+            universe_tickers = list(CONFIG.watchlists[uni_spec])
+        elif isinstance(uni_spec, list):
+            for grp in uni_spec:
+                universe_tickers.extend(CONFIG.watchlists[grp])
+        aux = params.get("market_filter_ticker")
+        if aux and aux not in universe_tickers:
+            universe_tickers.append(aux)
+        min_hist = int(params.get("min_history_days") or params.get("lookback_days", 70))
+        mkt_sma = int(params.get("market_filter_sma", 0))
+        if mkt_sma:
+            min_hist = max(min_hist, mkt_sma)
+        final_bars = market_data.prefetch_since(universe_tickers, min_hist, as_of=end_date)
+        last_prices = market_data.last_prices_eur(final_bars) if final_bars else {}
+
+        with SessionLocal() as s:
+            eq_rows = (
+                s.query(EquitySnapshot)
+                .filter(EquitySnapshot.bot_id == bot_id)
+                .order_by(EquitySnapshot.snap_date)
+                .all()
+            )
+            trade_rows = (
+                s.query(Trade)
+                .filter(Trade.bot_id == bot_id)
+                .order_by(Trade.timestamp)
+                .all()
+            )
+    finally:
+        # Restore original strategy params if we mutated them.
+        if _orig_params is not None:
+            current = CONFIG.strategies["strategies"][strategy_name]
+            current.clear()
+            current.update(_orig_params)
 
     equity_df = pd.DataFrame(
         [

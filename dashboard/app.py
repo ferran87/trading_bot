@@ -20,6 +20,7 @@ from core.portfolio import Portfolio  # noqa: E402
 
 from dashboard.backtest import render_backtest_tab  # noqa: E402
 from dashboard.readme_tab import render_readme_tab  # noqa: E402
+from dashboard.strategy_lab_tab import render_strategy_lab_tab  # noqa: E402
 from dashboard.kpis import _kpis_for  # noqa: E402
 from dashboard.queries import (  # noqa: E402
     _closed_positions,
@@ -1149,11 +1150,12 @@ if owner_all_bots.empty:
 n_paper = int(paper_all["enabled"].sum())
 n_live  = int(live_all["enabled"].sum())
 
-tab_readme, tab_paper, tab_live, tab_bt = st.tabs([
+tab_readme, tab_paper, tab_live, tab_bt, tab_lab = st.tabs([
     "📖 Guia",
     f"🧪 Paper Trading ({n_paper} bot{'s' if n_paper != 1 else ''})",
     f"💶 En Viu ({n_live} bot{'s' if n_live != 1 else ''})",
     "📊 Backtest",
+    "🧪 Laboratori d'estratègies",
 ])
 
 # ── Paper tab ──────────────────────────────────────────────────────────────────
@@ -1212,3 +1214,7 @@ with tab_bt:
 # ── Guia tab ───────────────────────────────────────────────────────────────────
 with tab_readme:
     render_readme_tab()
+
+# ── Strategy Lab tab ───────────────────────────────────────────────────────────
+with tab_lab:
+    render_strategy_lab_tab()

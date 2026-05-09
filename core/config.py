@@ -90,7 +90,23 @@ class Config:
 
     @property
     def strategies(self) -> dict[str, Any]:
-        return _load_yaml("strategies.yaml")
+        # Cached so the Strategy Lab can apply temporary in-process overrides
+        # to bot parameters during a backtest without losing them on the
+        # next access. The cache survives until ``reload_strategies()`` is
+        # called explicitly (e.g. after the dashboard approves a YAML edit).
+        if self._strategies is None:
+            self._strategies = _load_yaml("strategies.yaml")
+        return self._strategies
+
+    def reload_strategies(self) -> None:
+        """Invalidate the cached strategies dict so the next access re-reads
+        the YAML from disk.
+
+        Call this from any code path that has just edited ``strategies.yaml``
+        (notably the Strategy Lab approval flow). Tests that mutate strategies
+        between assertions can also use it to reset the cache.
+        """
+        self._strategies = None
 
     @property
     def broker_backend(self) -> str:
