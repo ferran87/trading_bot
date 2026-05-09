@@ -473,27 +473,60 @@ def _resolve_t212_pending_orders() -> None:
                 status = order_data.get("status", "")
 
                 if status == "FILLED":
-                    filled_qty   = float(
+                    wallet     = fill_data.get("walletImpact", {})
+                    taxes      = wallet.get("taxes", [])
+                    # fxRate: how many account-currency units per 1 EUR.
+                    # e.g. 1.175 means "1 EUR = $1.175 USD".
+                    # For EUR-denominated instruments fxRate is absent or 1.
+                    fx_rate    = float(wallet.get("fxRate", 1) or 1)
+
+                    filled_qty  = float(
                         fill_data.get("quantity")
                         or order_data.get("filledQuantity")
                         or trade.qty
                     )
-                    filled_price = float(
+                    # T212 fill price is in the instrument's NATIVE currency
+                    # (e.g. USD for MSFT, GS, JPM; EUR for ASML.AS, BNP.PA).
+                    # We must divide by fxRate to get the EUR equivalent.
+                    filled_price_native = float(
                         fill_data.get("price")
                         or order_data.get("filledPrice")
-                        or trade.price_eur
+                        or (trade.price_eur * fx_rate)  # fallback: reverse stored EUR
+                    )
+                    filled_price_eur = (
+                        filled_price_native / fx_rate if fx_rate > 0
+                        else filled_price_native
                     )
 
-                    old_qty = trade.qty
+                    # Actual fee from T212 taxes (FX conversion fee for USD stocks).
+                    # T212 returns tax quantities as negative (wallet deductions),
+                    # so we take abs() to store fees as positive costs.
+                    fee_eur = abs(sum(
+                        float(t.get("quantity") or t.get("value") or 0)
+                        for t in taxes
+                    ))
+                    if fee_eur == 0:
+                        net_abs = abs(float(wallet.get("netValue") or 0))
+                        if net_abs > 0:
+                            implied = filled_qty * filled_price_eur
+                            if abs(net_abs - implied) > 0.005:
+                                fee_eur = abs(net_abs - implied)
+
+                    old_qty   = trade.qty
+                    old_price = trade.price_eur
                     trade.qty       = filled_qty
-                    trade.price_eur = filled_price
+                    trade.price_eur = filled_price_eur
+                    if fee_eur > 0:
+                        trade.fee_eur = fee_eur
                     trade.status    = "filled"
 
                     log.info(
                         "_resolve_t212_pending: FILLED bot=%d %s %s qty %.4f->%.4f "
-                        "price %.4f->%.4f",
+                        "native_price=%.4f fx=%.6f price_eur %.4f->%.4f fee=%.4f",
                         trade.bot_id, trade.side, trade.ticker,
-                        old_qty, filled_qty, trade.price_eur, filled_price,
+                        old_qty, filled_qty,
+                        filled_price_native, fx_rate, old_price, filled_price_eur,
+                        fee_eur,
                     )
 
                     # Recompute the position from all trades for this (bot, ticker)
