@@ -316,7 +316,7 @@ def explain_trades(
         iteration += 1
 
         response = client.messages.create(
-            model="claude-sonnet-4-5-20251001",  # Sonnet: better Catalan quality; runs once/day post-trade
+            model="claude-sonnet-4-5",  # Sonnet: better Catalan quality; runs once/day post-trade
             max_tokens=4096,
             system=system_prompt,
             tools=TOOL_DEFINITIONS,

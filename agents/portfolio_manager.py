@@ -177,7 +177,7 @@ def run_daily_review(is_sunday: bool = False) -> dict:
         iteration += 1
 
         response = client.messages.create(
-            model="claude-sonnet-4-5-20251001",
+            model="claude-sonnet-4-5",
             max_tokens=8096,
             system=[
                 {

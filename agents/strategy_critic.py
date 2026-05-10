@@ -390,7 +390,7 @@ def run_critic_for_strategy(strategy: str, *, max_iterations: int = 30) -> dict:
 
     for iteration in range(1, max_iterations + 1):
         response = client.messages.create(
-            model="claude-sonnet-4-5-20251001",
+            model="claude-sonnet-4-5",
             max_tokens=4096,
             system=cached_system,
             tools=cached_tools,

@@ -22,6 +22,9 @@ import sys
 from datetime import date
 from pathlib import Path
 
+# Project root on sys.path so `agents`, `core`, etc. are importable
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 # ── Logging setup ─────────────────────────────────────────────────────────────
 _LOG_PATH = Path(__file__).parents[1] / "data" / "logs" / "portfolio_manager.log"
 _LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -63,7 +66,7 @@ def main() -> None:
         log.exception("run_portfolio_manager: unhandled error")
         sys.exit(1)
 
-    print("\n── Summary ─────────────────────────────────────────────────────")
+    print("\n-- Summary ------------------------------------------------------")
     print(json.dumps(summary, indent=2, default=str))
 
     if summary.get("reviews_written", 0) == 0 and not is_sunday:
