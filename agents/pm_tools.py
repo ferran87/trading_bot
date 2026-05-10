@@ -55,7 +55,7 @@ def get_universe_tickers() -> str:
     import yaml
 
     cfg_path = Path(__file__).parents[1] / "config" / "ai_thesis_universe.yaml"
-    with open(cfg_path) as f:
+    with open(cfg_path, encoding="utf-8") as f:
         data = yaml.safe_load(f)
 
     # Deduplicate by ticker (AMZN appears twice in starter YAML)
