@@ -1,0 +1,267 @@
+"""AI Thesis Portfolio Manager Agent (bot 30).
+
+Daily agent that:
+  1. Reviews all active/waiting theses against new price data and news
+  2. On Sundays: scans the curated universe for new candidates
+
+The agent writes ThesisReviewLog rows (always) and ThesisAction rows only
+when warranted (exit, add, or reduce after 5+ weakening reviews).  Every
+action requires explicit user approval via the dashboard before the strategy
+module executes it — this agent NEVER trades autonomously.
+
+Guardrails are enforced in ``agents/pm_tools.py`` (not just this prompt):
+  - conviction throttle (max 1 step/week)
+  - exit requires explicit citation of an invalidates_if condition
+  - 14-day hold floor before any thesis-driven exit
+  - bear_case ≥ 100 chars, ≥ 2 invalidation conditions, horizon ≥ 3 months
+
+Prompt caching (Anthropic):
+  The system prompt and tool definitions are sent with cache_control so
+  repeat daily runs reuse the cached prefix, reducing API cost ~35%.
+"""
+from __future__ import annotations
+
+import json
+import logging
+from datetime import date, datetime, timezone
+
+import anthropic
+
+from core.config import CONFIG  # noqa: F401 — triggers .env load (ANTHROPIC_API_KEY)
+from agents.pm_tools import TOOL_DEFINITIONS, dispatch
+
+log = logging.getLogger(__name__)
+
+# ── System prompt ─────────────────────────────────────────────────────────────
+
+_SYSTEM_PROMPT = """\
+Ets un gestor de cartera quantitatiu i narratiu en català. La teva feina és mantenir
+un conjunt de tesis d'inversió a mig termini (horitzó ≥ 3 mesos) sobre un univers
+curat d'accions europees i nord-americanes.
+
+Cada tesi és una narrativa: explica PER QUÈ volem tenir una acció, quins catalitzadors
+esperem, i en quines condicions específiques la tesi quedaria invalidada.  No és
+suficient que el preu hagi baixat o que el sentiment sigui negatiu — necessites que
+una de les condicions d'invalidació preescrites s'hagi complert per proposar una sortida.
+
+════════════════════════════════════════
+MODES D'OPERACIÓ
+════════════════════════════════════════
+
+1. REVISIÓ DIÀRIA (de dilluns a divendres):
+   a) Crida get_active_theses() per veure quines tesis estan actives o en espera.
+   b) Per a CADA tesi activa, crida get_ticker_analysis(ticker) i revisa si hi ha
+      nova informació que canviï la teva convicció.
+   c) Crida submit_review() per a cada tesi revisada. SEMPRE — fins i tot si el
+      veredicte és 'intact'. El registre és l'historial d'auditoria.
+   d) Si una condició d'invalidació s'ha complert: veredicte 'invalidated' + cita
+      la condició específica a exit_rationale.
+
+2. ESCANEIG DE CANDIDATS (només diumenges):
+   a) Crida get_universe_tickers() per veure l'univers complet.
+   b) Crida get_active_theses() per saber quins tickers ja estan coberts.
+   c) Per a cada ticker sense tesi activa, avalua si hi ha un cas d'inversió.
+      Crida get_ticker_analysis(ticker) per obtenir RSI + notícies.
+   d) Si la convicció és ≥ 3: crida submit_thesis() per crear la tesi.
+   e) Límit: màxim 2 noves tesis per diumenge.
+
+════════════════════════════════════════
+REGLES FERMES (no negociables)
+════════════════════════════════════════
+
+1. CAUSALITAT NARRATIVA: cada tesi ha d'explicar el "per què" de forma específica.
+   "L'acció ha baixat" NO és una raó per comprar. "El mercat ha sobre-reaccionat a
+   un cicle de normativa transitòria mentre els fonamentals segueixen intactes" SÍ ho és.
+
+2. ADVOCAT DEL DIABLE OBLIGATORI: el camp bear_case ha de tenir ≥ 100 caràcters i
+   exposar els riscos reals, no genèrics.
+
+3. CONDICIONS D'INVALIDACIÓ PRE-COMPROMESES: invalidates_if ha de tenir ≥ 2 condicions
+   específiques i mesurables ABANS d'entrar. Exemples bons:
+     • "Guia d'ingressos per Q3 < +20% interanual"
+     • "Pèrdua de quota de mercat cloud > 2pp en dos trimestres consecutius"
+     • "Marge operatiu cau per sota del 20%"
+   Exemples dolents (rebutjats): "si la situació empitjora", "si el mercat cau"
+
+4. HORITZÓ MÍNIM: les tesis han de tenir un horitzó ≥ 3 mesos. Per a jugades ràpides,
+   els bots de regles (bot 7, bot 10) són més adequats.
+
+5. CONVICCIÓ ESTABLE: no pots canviar la convicció més d'1 pas per setmana.
+   'weakening' és informatiu i no crea una carta d'acció — necessites ≥ 5 revisions
+   consecutives de debilitament + canvi de convicció per proposar una reducció.
+
+6. EXITS AMB EVIDÈNCIA: per proposar una sortida, el veredicte ha de ser 'invalidated'
+   i exit_rationale ha de citar explícitament quina condició d'invalidació s'ha complert.
+   Una caiguda de preu o un titular negatiu aïllat NO és suficient.
+
+7. INPUTS LIMITATS: les teves eines t'ofereixen RSI + notícies de Yahoo Finance.
+   No tens accés a informes d'analistes, transcripcions de resultats, SEC filings
+   ni dades macroeconòmiques de flux. Les teves tesis han de ser "interpretació
+   tècnica amb consciència narrativa", no anàlisi fonamental profunda.
+
+════════════════════════════════════════
+LLENGUA I ESTIL
+════════════════════════════════════════
+
+Escriu en català estàndard (norma IEC). Mai en castellà ni en anglès.
+Errors habituals que has d'evitar:
+• "tenir que" → "haver de"  •  "inclús" → "fins i tot"
+• "en base a" → "basant-se en"  •  "lo" → "el que" / "allò que"
+• "de cara a" → "per a" (tret d'ús temporal)
+
+Vocabulari financer: acció, borsa, cotització, rendibilitat, benefici, pèrdua,
+tendència, rebot, correcció, entrada, sortida.
+
+Estil: clar, directe i amb fonamentació.  No uses jerga excessiva.
+Cada revisió ha de ser llegible per a un inversor intel·ligent però no professional.
+"""
+
+
+# ── Agent loop ────────────────────────────────────────────────────────────────
+
+def run_daily_review(is_sunday: bool = False) -> dict:
+    """Run the portfolio manager agent for one daily session.
+
+    Parameters
+    ----------
+    is_sunday : bool
+        If True, includes candidate evaluation in addition to daily review.
+
+    Returns
+    -------
+    dict
+        Summary with keys: reviews_written, actions_proposed, theses_created, errors.
+    """
+    client = anthropic.Anthropic()
+    today = date.today()
+
+    task_description = (
+        f"Avui és {today.strftime('%A %d/%m/%Y')} ({'diumenge' if is_sunday else 'dia feiner'}).\n\n"
+    )
+
+    if is_sunday:
+        task_description += (
+            "Tasques d'avui:\n"
+            "1. REVISIÓ DIÀRIA: revisa totes les tesis actives i en espera.\n"
+            "2. ESCANEIG DE CANDIDATS: avalua l'univers complet i proposa ≤ 2 noves tesis.\n\n"
+            "Comença sempre per la revisió de les tesis existents, després escaneja candidats."
+        )
+    else:
+        task_description += (
+            "Tasques d'avui:\n"
+            "1. REVISIÓ DIÀRIA: revisa totes les tesis actives i en espera.\n\n"
+            "Crida get_active_theses() per veure quines tesis has de revisar."
+        )
+
+    # ── Prompt-cached system + tools ─────────────────────────────────────────
+    # System prompt is stable → cache it.
+    # Tool list is stable → cache its last element so the full prefix is cached.
+    cached_tools = TOOL_DEFINITIONS.copy()
+    if cached_tools:
+        last = dict(cached_tools[-1])
+        last["cache_control"] = {"type": "ephemeral"}
+        cached_tools[-1] = last
+
+    messages: list[dict] = [{"role": "user", "content": task_description}]
+
+    log.info(
+        "portfolio_manager: starting agent is_sunday=%s date=%s",
+        is_sunday, today,
+    )
+
+    max_iterations = 40  # generous cap — may review many theses + candidates
+    iteration = 0
+    final_text = ""
+
+    while iteration < max_iterations:
+        iteration += 1
+
+        response = client.messages.create(
+            model="claude-sonnet-4-5-20251001",
+            max_tokens=8096,
+            system=[
+                {
+                    "type": "text",
+                    "text": _SYSTEM_PROMPT,
+                    "cache_control": {"type": "ephemeral"},
+                }
+            ],
+            tools=cached_tools,
+            messages=messages,
+        )
+
+        log.debug(
+            "portfolio_manager: iteration=%d stop_reason=%s in=%d out=%d",
+            iteration, response.stop_reason,
+            response.usage.input_tokens, response.usage.output_tokens,
+        )
+
+        if response.stop_reason == "end_turn":
+            final_text = "\n".join(
+                block.text for block in response.content if hasattr(block, "text")
+            )
+            log.info(
+                "portfolio_manager: done in %d iteration(s), %d chars",
+                iteration, len(final_text),
+            )
+            break
+
+        if response.stop_reason == "tool_use":
+            tool_results = []
+            for block in response.content:
+                if block.type != "tool_use":
+                    continue
+                log.info(
+                    "portfolio_manager: tool_call tool=%s input=%s",
+                    block.name, json.dumps(block.input)[:200],
+                )
+                result = dispatch(block.name, block.input)
+                tool_results.append({
+                    "type":        "tool_result",
+                    "tool_use_id": block.id,
+                    "content":     result,
+                })
+
+            messages.append({"role": "assistant", "content": response.content})
+            messages.append({"role": "user",      "content": tool_results})
+            continue
+
+        log.warning("portfolio_manager: unexpected stop_reason=%s", response.stop_reason)
+        break
+
+    else:
+        log.error("portfolio_manager: hit max_iterations=%d without finishing", max_iterations)
+
+    # ── Summarise what happened ───────────────────────────────────────────────
+    from core.db import ThesisReviewLog, ThesisAction, Thesis, get_session
+    from datetime import timedelta
+
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=1)
+    with get_session() as s:
+        reviews_written = (
+            s.query(ThesisReviewLog)
+            .filter(ThesisReviewLog.reviewed_at >= cutoff)
+            .count()
+        )
+        actions_proposed = (
+            s.query(ThesisAction)
+            .filter(ThesisAction.proposed_at >= cutoff)
+            .count()
+        )
+        theses_created = (
+            s.query(Thesis)
+            .filter(Thesis.created_at >= cutoff, Thesis.bot_id == 30)
+            .count()
+        )
+
+    summary = {
+        "date":            str(today),
+        "is_sunday":       is_sunday,
+        "reviews_written": reviews_written,
+        "actions_proposed": actions_proposed,
+        "theses_created":  theses_created,
+        "iterations":      iteration,
+        "agent_output":    final_text[:500] if final_text else "(no output)",
+    }
+    log.info("portfolio_manager: summary=%s", json.dumps(summary))
+    return summary

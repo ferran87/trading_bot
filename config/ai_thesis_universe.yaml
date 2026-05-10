@@ -1,0 +1,176 @@
+# Curated watchlist for the AI Thesis Bot (bot 30).
+#
+# Claude evaluates these tickers every Sunday and builds/updates investment
+# theses for them.  New tickers require explicit user approval before being
+# added here — Claude cannot modify this file autonomously.
+#
+# Sector tags are used for the 40% sector-concentration cap.
+# Tickers must be valid yfinance symbols.
+
+tickers:
+
+  # ── US Technology ──────────────────────────────────────────────────────────
+  - ticker: MSFT
+    name: Microsoft
+    sector: technology
+    region: us
+
+  - ticker: NVDA
+    name: NVIDIA
+    sector: technology
+    region: us
+
+  - ticker: AAPL
+    name: Apple
+    sector: technology
+    region: us
+
+  - ticker: GOOGL
+    name: Alphabet
+    sector: technology
+    region: us
+
+  - ticker: META
+    name: Meta Platforms
+    sector: technology
+    region: us
+
+  - ticker: AMZN
+    name: Amazon
+    sector: technology
+    region: us
+
+  - ticker: AMD
+    name: Advanced Micro Devices
+    sector: technology
+    region: us
+
+  - ticker: CRM
+    name: Salesforce
+    sector: technology
+    region: us
+
+  - ticker: NOW
+    name: ServiceNow
+    sector: technology
+    region: us
+
+  # ── US Consumer / Retail ───────────────────────────────────────────────────
+  - ticker: COST
+    name: Costco
+    sector: consumer
+    region: us
+
+  - ticker: AMZN
+    name: Amazon (also Consumer)
+    sector: consumer
+    region: us
+    # Note: dual-listed under technology above; sector tag here overrides
+    # for concentration tracking — pick whichever fits your view.
+    # Remove one entry to avoid duplicates if desired.
+
+  - ticker: NKE
+    name: Nike
+    sector: consumer
+    region: us
+
+  # ── US Financials ──────────────────────────────────────────────────────────
+  - ticker: JPM
+    name: JPMorgan Chase
+    sector: financials
+    region: us
+
+  - ticker: GS
+    name: Goldman Sachs
+    sector: financials
+    region: us
+
+  - ticker: V
+    name: Visa
+    sector: financials
+    region: us
+
+  # ── US Healthcare ──────────────────────────────────────────────────────────
+  - ticker: LLY
+    name: Eli Lilly
+    sector: healthcare
+    region: us
+
+  - ticker: UNH
+    name: UnitedHealth Group
+    sector: healthcare
+    region: us
+
+  - ticker: ABBV
+    name: AbbVie
+    sector: healthcare
+    region: us
+
+  # ── US Industrials / Energy ────────────────────────────────────────────────
+  - ticker: CAT
+    name: Caterpillar
+    sector: industrials
+    region: us
+
+  - ticker: RTX
+    name: RTX (Raytheon)
+    sector: industrials
+    region: us
+
+  # ── European Technology ────────────────────────────────────────────────────
+  - ticker: ASML.AS
+    name: ASML Holding
+    sector: technology
+    region: eu
+
+  - ticker: SAP.DE
+    name: SAP
+    sector: technology
+    region: eu
+
+  - ticker: ADYEN.AS
+    name: Adyen
+    sector: technology
+    region: eu
+
+  # ── European Consumer / Industrials ───────────────────────────────────────
+  - ticker: MC.PA
+    name: LVMH
+    sector: consumer
+    region: eu
+
+  - ticker: OR.PA
+    name: L'Oréal
+    sector: consumer
+    region: eu
+
+  - ticker: TTE.PA
+    name: TotalEnergies
+    sector: energy
+    region: eu
+
+  - ticker: AIR.PA
+    name: Airbus
+    sector: industrials
+    region: eu
+
+  - ticker: SIE.DE
+    name: Siemens
+    sector: industrials
+    region: eu
+
+  # ── European Financials / Healthcare ──────────────────────────────────────
+  - ticker: BNP.PA
+    name: BNP Paribas
+    sector: financials
+    region: eu
+
+  - ticker: ROG.SW
+    name: Roche
+    sector: healthcare
+    region: eu
+
+  - ticker: NOVN.SW
+    name: Novartis
+    sector: healthcare
+    region: eu

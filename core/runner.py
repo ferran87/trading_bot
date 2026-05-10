@@ -20,6 +20,7 @@ from core.db import Bot, ErrorLog, RunLog, get_session
 from core.portfolio import Portfolio
 from strategies.base import Strategy, StrategyContext
 from strategies.aggressive_momentum import AggressiveMomentumStrategy
+from strategies.ai_thesis import AiThesisStrategy
 from strategies.etf_momentum import EtfMomentumStrategy
 from strategies.mean_reversion import MeanReversionStrategy
 from strategies.rsi_accumulator import RsiAccumulatorStrategy
@@ -40,6 +41,7 @@ def validate_run_dates(today: date, as_of: date | None) -> None:
 
 STRATEGY_REGISTRY: dict[str, Callable[[], Strategy]] = {
     "aggressive_momentum": AggressiveMomentumStrategy,
+    "ai_thesis": AiThesisStrategy,          # Phase 2 — AI Thesis Bot (bot 30)
     "etf_momentum": EtfMomentumStrategy,
     "mean_reversion": MeanReversionStrategy,
     "rsi_accumulator": RsiAccumulatorStrategy,

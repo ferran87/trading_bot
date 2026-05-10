@@ -234,6 +234,128 @@ class RuleChangeLog(Base):
     pnl_90d_after = Column(Float, nullable=True)
 
 
+# ── AI Thesis Bot tables (Phase 2 of the AI Trading System plan) ──────────────
+# These power bot 30 (ai_thesis strategy): Claude maintains medium-term
+# investment theses per ticker, proposes actions (open/add/reduce/exit),
+# and the user approves each action via the "🧠 Tesis d'inversió" dashboard tab.
+# Theses are stable by design (horizon ≥ 3 months, conviction throttled).
+# See docs/DECISIONS.md and the plan in .claude/plans/ for full rationale.
+
+class Thesis(Base):
+    """A medium-term investment narrative for a single ticker.
+
+    Created by ``agents/portfolio_manager.py`` on Sundays after evaluating the
+    watchlist. Every change to ``conviction`` is throttled (max 1 step/week) to
+    prevent Claude from reacting to short-term noise.  Exits require explicit
+    citation of a pre-written ``invalidates_if`` condition.
+    """
+
+    __tablename__ = "theses"
+
+    id = Column(Integer, primary_key=True)
+    ticker = Column(String, nullable=False, index=True)
+    bot_id = Column(Integer, ForeignKey("bots.id"), nullable=False, index=True)
+
+    # Lifecycle
+    status = Column(String, nullable=False, default="candidate", index=True)
+    # 'candidate' — created, waiting for technical signal or high conviction entry
+    # 'waiting'   — conviction ≤ 3, waiting for RSI/SMA confirmation before entry
+    # 'active'    — position is open and thesis is being monitored
+    # 'invalidated' — explicit kill condition met; exit proposed
+    # 'exited'    — position closed, thesis archived
+    opened_at = Column(DateTime, nullable=False, default=utcnow, index=True)
+    closed_at = Column(DateTime, nullable=True)
+
+    # Claude-authored narrative (all required; validated at insert time)
+    thesis_text = Column(Text, nullable=False)      # 2-3 sentence summary
+    bull_case   = Column(Text, nullable=False)      # what makes this work
+    bear_case   = Column(Text, nullable=False)      # mandatory devil's advocate (≥100 chars)
+    catalysts      = Column(JSON, nullable=False, default=list)  # [{event, expected_date, expected_outcome}]
+    invalidates_if = Column(JSON, nullable=False, default=list)  # ≥2 specific, measurable conditions
+
+    # Decision data
+    conviction = Column(Integer, nullable=False)    # 1-5
+    conviction_last_changed_at = Column(DateTime, nullable=True)   # throttle: max 1 step/week
+    consecutive_weakening_count = Column(Integer, nullable=False, default=0)  # need 5+ before resize
+    horizon_months = Column(Integer, nullable=False, default=3)    # ≥ 3 enforced at creation
+
+    # Price targets (informational; not used as hard stops — trailing stop handles that)
+    target_price_eur = Column(Float, nullable=True)
+    stop_price_eur   = Column(Float, nullable=True)
+
+    # Risk cap
+    max_position_pct = Column(Float, nullable=False, default=0.15)  # ≤ 15% of bot capital
+
+    # Tracking
+    realized_pnl_eur = Column(Float, nullable=True)
+    review_count = Column(Integer, nullable=False, default=0)
+    last_reviewed_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow)
+
+
+class ThesisReviewLog(Base):
+    """Daily review record: what Claude saw and concluded.
+
+    Written on every daily pass, even when verdict is 'intact' and no action
+    is proposed. The full log is the audit trail that lets the user calibrate
+    trust in Claude's narrative reasoning over time.
+    """
+
+    __tablename__ = "thesis_review_logs"
+
+    id = Column(Integer, primary_key=True)
+    thesis_id = Column(Integer, ForeignKey("theses.id"), nullable=False, index=True)
+    reviewed_at = Column(DateTime, nullable=False, default=utcnow, index=True)
+
+    new_info_summary = Column(Text, nullable=False)  # Claude's summary of news + price action
+    conviction_before = Column(Integer, nullable=False)
+    conviction_after  = Column(Integer, nullable=False)
+    verdict = Column(String, nullable=False)
+    # 'intact'      — thesis unchanged; no action needed
+    # 'strengthened'— new evidence supports bull case
+    # 'weakening'   — concerning but not invalidated (informational only; no action card)
+    # 'invalidated' — explicit kill condition met; EXIT proposed
+    notes = Column(Text, nullable=False, default="")
+
+
+class ThesisAction(Base):
+    """A proposed action for a thesis position, awaiting user approval.
+
+    Entries can be created by:
+    - Sunday candidate scan (conviction ≥ 4 → immediate 'open' proposal)
+    - Daily review loop (conviction = 3 → 'open' once RSI/SMA gate triggers)
+    - Daily review loop ('exit' when thesis invalidated, 'add'/'reduce' on conviction shift)
+
+    The strategy module ``strategies/ai_thesis.py`` executes approved actions
+    that have not yet been executed (``executed_at IS NULL``).
+    """
+
+    __tablename__ = "thesis_actions"
+
+    id = Column(Integer, primary_key=True)
+    thesis_id = Column(Integer, ForeignKey("theses.id"), nullable=False, index=True)
+    proposed_at = Column(DateTime, nullable=False, default=utcnow, index=True)
+
+    action_type = Column(String, nullable=False)
+    # 'open'   — initiate position
+    # 'add'    — increase position (conviction raised or price pullback)
+    # 'reduce' — decrease position (conviction dropped after 5+ weakening reviews)
+    # 'exit'   — close position (thesis invalidated)
+
+    qty_proposed = Column(Float, nullable=True)      # shares; None = use conviction-based sizing
+    size_pct     = Column(Float, nullable=True)      # % of bot capital computed at proposal time
+    rationale    = Column(Text, nullable=False)      # must cite invalidates_if for 'exit' actions
+    conviction_at_proposal = Column(Integer, nullable=True)
+
+    status = Column(String, nullable=False, default="pending", index=True)
+    # 'pending' | 'approved' | 'rejected' | 'expired' | 'executed'
+    decided_at  = Column(DateTime, nullable=True)
+    executed_at = Column(DateTime, nullable=True)
+
+    fill_qty       = Column(Float, nullable=True)
+    fill_price_eur = Column(Float, nullable=True)
+
+
 # --- Engine / session ---
 
 _engine = None

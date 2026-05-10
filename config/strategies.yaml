@@ -132,6 +132,16 @@ bots:
     owner: Antonio
     ibkr_port: 4005         # Antonio live Gateway port (to be configured)
 
+  # --- AI Thesis Bot (Phase 2) ---
+  - id: 30
+    name: AI Thesis Bot (Ferran) — Paper
+    strategy: ai_thesis
+    trading_mode: paper
+    enabled: false          # enable after smoke test on feature/ai-thesis-bot branch
+    owner: Ferran
+    ibkr_port_paper: 4002
+    initial_capital_eur: 5000   # bounded capital for the thesis bot
+
 
 strategies:
 
@@ -282,6 +292,25 @@ strategies:
     max_concurrent: 10
     per_position_pct: 0.10            # 10% per position × 10 slots = 100% max invested
     earnings_blackout_days: 7         # skip entries within 7 calendar days of earnings
+
+  ai_thesis:
+    # Bot 30 — AI Thesis Bot.  Parameters consumed by strategies/ai_thesis.py.
+    # The strategy executes approved ThesisAction rows from the database.
+    # Sizing is computed dynamically (conviction multiplier × base_pct).
+    universe: []                # not used — universe comes from config/ai_thesis_universe.yaml
+    base_position_pct: 0.10     # 10% of bot capital = 1.0× conviction multiplier
+    max_position_pct: 0.15      # hard cap regardless of conviction
+    sector_cap_pct: 0.40        # max 40% in any single sector
+    min_hold_days: 14           # thesis-driven exits not allowed before this
+    trail_pct: 0.22             # trailing stop from peak (same as trend_momentum)
+    catastrophic_stop: -0.20    # hard stop at -20% from avg entry
+    # Two-tier entry gate (for conviction ≤ 3 waiting theses):
+    rsi_period: 14
+    rsi_was_below: 30           # RSI must have been oversold recently
+    rsi_now_above: 40           # and rebounded
+    rsi_entry_max: 65           # not already overbought
+    rsi_lookback_days: 15
+    sma_period: 50              # stock must be above SMA50
 
   news_sentiment:
     universe: [stocks_us, stocks_eu]
