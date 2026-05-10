@@ -5,172 +5,460 @@
 # added here — Claude cannot modify this file autonomously.
 #
 # Sector tags are used for the 40% sector-concentration cap.
+# Theme tags are informational (not enforced in code) but help Claude
+# group and reason about the portfolio.
 # Tickers must be valid yfinance symbols.
 
 tickers:
 
-  # ── US Technology ──────────────────────────────────────────────────────────
-  - ticker: MSFT
-    name: Microsoft
-    sector: technology
-    region: us
+  # ══════════════════════════════════════════════════════════════════
+  # AI INFRASTRUCTURE — The physical layer: chips, servers, networking,
+  # cooling, and the companies building out the training/inference stack
+  # ══════════════════════════════════════════════════════════════════
 
+  # ── Semiconductors (large cap) ─────────────────────────────────────
   - ticker: NVDA
     name: NVIDIA
     sector: technology
-    region: us
-
-  - ticker: AAPL
-    name: Apple
-    sector: technology
-    region: us
-
-  - ticker: GOOGL
-    name: Alphabet
-    sector: technology
-    region: us
-
-  - ticker: META
-    name: Meta Platforms
-    sector: technology
-    region: us
-
-  - ticker: AMZN
-    name: Amazon
-    sector: technology
+    theme: ai_chips
     region: us
 
   - ticker: AMD
     name: Advanced Micro Devices
     sector: technology
+    theme: ai_chips
     region: us
 
+  - ticker: AVGO
+    name: Broadcom
+    sector: technology
+    theme: ai_chips        # custom AI ASICs + AI networking (Tomahawk)
+    region: us
+
+  - ticker: MRVL
+    name: Marvell Technology
+    sector: technology
+    theme: ai_chips        # custom AI silicon, optical DSPs
+    region: us
+    market_cap: large
+
+  - ticker: ARM
+    name: ARM Holdings
+    sector: technology
+    theme: ai_chips        # CPU/NPU architecture licensing — in every AI device
+    region: us
+
+  - ticker: QCOM
+    name: Qualcomm
+    sector: technology
+    theme: ai_chips        # edge AI, on-device inference
+    region: us
+
+  - ticker: TSM
+    name: Taiwan Semiconductor (ADR)
+    sector: technology
+    theme: ai_chips        # manufactures NVDA, AMD, Apple silicon
+    region: us
+
+  - ticker: ASML.AS
+    name: ASML Holding
+    sector: technology
+    theme: ai_chips        # EUV lithography monopoly — gates all leading-edge fabs
+    region: eu
+
+  # ── Semiconductors (mid/small cap) ─────────────────────────────────
+  - ticker: ALAB
+    name: Astera Labs
+    sector: technology
+    theme: ai_infrastructure   # PCIe/CXL connectivity for AI scale-out clusters
+    region: us
+    market_cap: small
+
+  - ticker: CRDO
+    name: Credo Technology
+    sector: technology
+    theme: ai_infrastructure   # active electrical cables, SerDes for hyperscaler racks
+    region: us
+    market_cap: small
+
+  - ticker: SMCI
+    name: Super Micro Computer
+    sector: technology
+    theme: ai_infrastructure   # AI server systems, liquid cooling integration
+    region: us
+    market_cap: mid
+
+  - ticker: MPWR
+    name: Monolithic Power Systems
+    sector: technology
+    theme: ai_chips            # power management ICs for AI compute
+    region: us
+    market_cap: mid
+
+  - ticker: ONTO
+    name: Onto Innovation
+    sector: technology
+    theme: ai_chips            # semiconductor process control + inspection equipment
+    region: us
+    market_cap: small
+
+  - ticker: FORM
+    name: FormFactor
+    sector: technology
+    theme: ai_chips            # probe cards for semiconductor testing
+    region: us
+    market_cap: small
+
+  - ticker: WOLF
+    name: Wolfspeed
+    sector: technology
+    theme: ai_energy           # SiC power semiconductors (EV + data center power)
+    region: us
+    market_cap: small
+
+  # ── Networking / Optical ────────────────────────────────────────────
+  - ticker: ANET
+    name: Arista Networks
+    sector: technology
+    theme: ai_infrastructure   # Ethernet switching for AI clusters (replacing InfiniBand)
+    region: us
+
+  - ticker: CIEN
+    name: Ciena
+    sector: technology
+    theme: ai_infrastructure   # optical networking — backhaul for data center interconnects
+    region: us
+    market_cap: mid
+
+  - ticker: LITE
+    name: Lumentum
+    sector: technology
+    theme: ai_infrastructure   # optical transceivers (800G+) for hyperscaler networks
+    region: us
+    market_cap: mid
+
+  # ── Data Center Hardware / Cooling ─────────────────────────────────
+  - ticker: VRT
+    name: Vertiv Holdings
+    sector: industrials
+    theme: ai_infrastructure   # power + cooling for data centers — direct beneficiary of AI capex
+    region: us
+
+  - ticker: ETN
+    name: Eaton Corporation
+    sector: industrials
+    theme: ai_infrastructure   # electrical power management, UPS for data centers
+    region: us
+
+  - ticker: PWR
+    name: Quanta Services
+    sector: industrials
+    theme: ai_energy           # electrical grid construction + data center power hookups
+    region: us
+
+  - ticker: HUBB
+    name: Hubbell
+    sector: industrials
+    theme: ai_infrastructure   # electrical connectors + grid products for data centers
+    region: us
+    market_cap: mid
+
+  - ticker: CLS
+    name: Celestica
+    sector: technology
+    theme: ai_infrastructure   # EMS manufacturer for hyperscaler AI hardware
+    region: us
+    market_cap: mid
+
+  # ══════════════════════════════════════════════════════════════════
+  # AI SOFTWARE & PLATFORMS — Models, clouds, agents, data, observability
+  # ══════════════════════════════════════════════════════════════════
+
+  # ── Hyperscalers (also AI compute providers) ───────────────────────
+  - ticker: MSFT
+    name: Microsoft
+    sector: technology
+    theme: ai_software         # Azure AI, GitHub Copilot, OpenAI partnership
+    region: us
+
+  - ticker: GOOGL
+    name: Alphabet
+    sector: technology
+    theme: ai_software         # Google Cloud AI, Gemini, TPU fleet
+    region: us
+
+  - ticker: AMZN
+    name: Amazon
+    sector: technology
+    theme: ai_software         # AWS Bedrock, Trainium/Inferentia chips
+    region: us
+
+  - ticker: META
+    name: Meta Platforms
+    sector: technology
+    theme: ai_software         # Llama open models, AI ads, Reality Labs
+    region: us
+
+  # ── Enterprise AI / Agentic Workforce ─────────────────────────────
   - ticker: CRM
     name: Salesforce
     sector: technology
+    theme: agentic             # Agentforce — agentic CRM (key theme for 2025-26)
     region: us
 
   - ticker: NOW
     name: ServiceNow
     sector: technology
+    theme: agentic             # AI agents for enterprise workflow automation
     region: us
 
-  # ── US Consumer / Retail ───────────────────────────────────────────────────
-  - ticker: COST
-    name: Costco
-    sector: consumer
-    region: us
-
-  - ticker: AMZN
-    name: Amazon (also Consumer)
-    sector: consumer
-    region: us
-    # Note: dual-listed under technology above; sector tag here overrides
-    # for concentration tracking — pick whichever fits your view.
-    # Remove one entry to avoid duplicates if desired.
-
-  - ticker: NKE
-    name: Nike
-    sector: consumer
-    region: us
-
-  # ── US Financials ──────────────────────────────────────────────────────────
-  - ticker: JPM
-    name: JPMorgan Chase
-    sector: financials
-    region: us
-
-  - ticker: GS
-    name: Goldman Sachs
-    sector: financials
-    region: us
-
-  - ticker: V
-    name: Visa
-    sector: financials
-    region: us
-
-  # ── US Healthcare ──────────────────────────────────────────────────────────
-  - ticker: LLY
-    name: Eli Lilly
-    sector: healthcare
-    region: us
-
-  - ticker: UNH
-    name: UnitedHealth Group
-    sector: healthcare
-    region: us
-
-  - ticker: ABBV
-    name: AbbVie
-    sector: healthcare
-    region: us
-
-  # ── US Industrials / Energy ────────────────────────────────────────────────
-  - ticker: CAT
-    name: Caterpillar
-    sector: industrials
-    region: us
-
-  - ticker: RTX
-    name: RTX (Raytheon)
-    sector: industrials
-    region: us
-
-  # ── European Technology ────────────────────────────────────────────────────
-  - ticker: ASML.AS
-    name: ASML Holding
+  - ticker: PLTR
+    name: Palantir Technologies
     sector: technology
-    region: eu
+    theme: agentic             # AI Platform (AIP) for government + enterprise
+    region: us
 
+  - ticker: PATH
+    name: UiPath
+    sector: technology
+    theme: agentic             # RPA + agentic automation — direct "agentic workforce" play
+    region: us
+    market_cap: mid
+
+  - ticker: AI
+    name: C3.ai
+    sector: technology
+    theme: agentic             # enterprise AI applications
+    region: us
+    market_cap: small
+
+  - ticker: BBAI
+    name: BigBear.ai
+    sector: technology
+    theme: agentic             # AI decisioning for defense/intelligence (small cap)
+    region: us
+    market_cap: small
+
+  # ── AI Data Infrastructure ─────────────────────────────────────────
+  - ticker: SNOW
+    name: Snowflake
+    sector: technology
+    theme: ai_data             # AI data cloud + Cortex AI
+    region: us
+
+  - ticker: MDB
+    name: MongoDB
+    sector: technology
+    theme: ai_data             # vector search, AI application data layer
+    region: us
+    market_cap: mid
+
+  - ticker: DDOG
+    name: Datadog
+    sector: technology
+    theme: ai_data             # AI observability + LLM monitoring
+    region: us
+
+  - ticker: NET
+    name: Cloudflare
+    sector: technology
+    theme: ai_infrastructure   # AI inference at the edge (Workers AI)
+    region: us
+
+  - ticker: ESTC
+    name: Elastic NV
+    sector: technology
+    theme: ai_data             # vector search + AI retrieval (RAG infrastructure)
+    region: us
+    market_cap: mid
+
+  - ticker: GTLB
+    name: GitLab
+    sector: technology
+    theme: agentic             # AI-assisted software development (Duo agent)
+    region: us
+    market_cap: mid
+
+  # ── AI Security ────────────────────────────────────────────────────
+  - ticker: S
+    name: SentinelOne
+    sector: technology
+    theme: ai_software         # AI-native cybersecurity (Purple AI)
+    region: us
+    market_cap: mid
+
+  - ticker: PANW
+    name: Palo Alto Networks
+    sector: technology
+    theme: ai_software         # AI-powered security platform
+    region: us
+
+  # ── European AI Software ───────────────────────────────────────────
   - ticker: SAP.DE
     name: SAP
     sector: technology
+    theme: agentic             # Joule AI agent across ERP suite
     region: eu
 
   - ticker: ADYEN.AS
     name: Adyen
     sector: technology
+    theme: ai_software         # AI fraud detection, payments infrastructure
     region: eu
 
-  # ── European Consumer / Industrials ───────────────────────────────────────
-  - ticker: MC.PA
-    name: LVMH
-    sector: consumer
-    region: eu
+  # ══════════════════════════════════════════════════════════════════
+  # ENERGY FOR AI — Power generation, transmission, and nuclear for
+  # the data center buildout (fastest-growing electricity demand)
+  # ══════════════════════════════════════════════════════════════════
 
-  - ticker: OR.PA
-    name: L'Oréal
-    sector: consumer
-    region: eu
+  - ticker: CEG
+    name: Constellation Energy
+    sector: energy
+    theme: ai_energy           # nuclear power for data centers (MSFT deal)
+    region: us
+
+  - ticker: VST
+    name: Vistra Energy
+    sector: energy
+    theme: ai_energy           # nuclear + gas power; data center offtake deals
+    region: us
+
+  - ticker: GEV
+    name: GE Vernova
+    sector: industrials
+    theme: ai_energy           # gas turbines + grid equipment for data center power
+    region: us
+
+  - ticker: NRG
+    name: NRG Energy
+    sector: energy
+    theme: ai_energy           # power generation, pursuing data center contracts
+    region: us
+    market_cap: mid
+
+  - ticker: OKLO
+    name: Oklo
+    sector: energy
+    theme: ai_energy           # small modular reactors (Aurora) — Sam Altman-backed
+    region: us
+    market_cap: small
+
+  - ticker: SMR
+    name: NuScale Power
+    sector: energy
+    theme: ai_energy           # small modular reactors for carbon-free data center power
+    region: us
+    market_cap: small
 
   - ticker: TTE.PA
     name: TotalEnergies
     sector: energy
+    theme: ai_energy           # LNG + renewables; EU energy independence angle
     region: eu
+
+  # ══════════════════════════════════════════════════════════════════
+  # ESTABLISHED POSITIONS (existing companies with AI exposure)
+  # Kept from original universe — strong balance sheets, AI optionality
+  # ══════════════════════════════════════════════════════════════════
+
+  - ticker: AAPL
+    name: Apple
+    sector: technology
+    theme: ai_software         # Apple Intelligence, on-device AI
+    region: us
+
+  - ticker: COST
+    name: Costco
+    sector: consumer
+    theme: quality_compounder
+    region: us
+
+  - ticker: NKE
+    name: Nike
+    sector: consumer
+    theme: quality_compounder
+    region: us
+
+  - ticker: JPM
+    name: JPMorgan Chase
+    sector: financials
+    theme: ai_software         # JPMC LLM (DocLLM), AI in trading/risk
+    region: us
+
+  - ticker: GS
+    name: Goldman Sachs
+    sector: financials
+    theme: quality_compounder
+    region: us
+
+  - ticker: V
+    name: Visa
+    sector: financials
+    theme: quality_compounder
+    region: us
+
+  - ticker: LLY
+    name: Eli Lilly
+    sector: healthcare
+    theme: ai_biotech          # AI-accelerated drug discovery + GLP-1 franchise
+    region: us
+
+  - ticker: ABBV
+    name: AbbVie
+    sector: healthcare
+    theme: quality_compounder
+    region: us
+
+  - ticker: CAT
+    name: Caterpillar
+    sector: industrials
+    theme: quality_compounder
+    region: us
+
+  - ticker: RTX
+    name: RTX (Raytheon)
+    sector: industrials
+    theme: quality_compounder  # defense + AI-guided systems
+    region: us
 
   - ticker: AIR.PA
     name: Airbus
     sector: industrials
+    theme: quality_compounder
     region: eu
 
   - ticker: SIE.DE
     name: Siemens
     sector: industrials
+    theme: agentic             # Siemens AI (Industrial Copilot), factory automation
     region: eu
 
-  # ── European Financials / Healthcare ──────────────────────────────────────
+  - ticker: MC.PA
+    name: LVMH
+    sector: consumer
+    theme: quality_compounder
+    region: eu
+
+  - ticker: OR.PA
+    name: L'Oreal
+    sector: consumer
+    theme: quality_compounder
+    region: eu
+
   - ticker: BNP.PA
     name: BNP Paribas
     sector: financials
+    theme: quality_compounder
     region: eu
 
   - ticker: ROG.SW
     name: Roche
     sector: healthcare
+    theme: ai_biotech
     region: eu
 
   - ticker: NOVN.SW
     name: Novartis
     sector: healthcare
+    theme: ai_biotech
     region: eu
