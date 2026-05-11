@@ -266,15 +266,55 @@ def render_thesis_tab() -> None:
 
     if waiting_theses:
         st.subheader(f"⏳ Candidatures en espera de senyal tècnic ({len(waiting_theses)})")
+        st.caption(
+            "Aquestes tesis tenen convicció 3-4. Esperen que el filtre tècnic "
+            "(RSI/SMA50) confirmi el moment d'entrada abans de generar una "
+            "carta d'acció. Pots veure el raonament complet aquí."
+        )
         for thesis in waiting_theses:
             days_waiting = (datetime.now(timezone.utc) - thesis.opened_at.replace(tzinfo=timezone.utc)).days
             expires_in = max(0, 30 - days_waiting)
+
+            # Compute the conviction-multiplier sizing the bot would propose
+            # if/when the technical signal triggers
+            conviction_mult = {5: 1.5, 4: 1.2, 3: 1.0, 2: 0.8, 1: 0.6}
+            base_pct = 0.10
+            max_pct = 0.15
+            size_pct = min(base_pct * conviction_mult.get(thesis.conviction, 1.0), max_pct)
+            size_eur = 5000.0 * size_pct
+
             with st.container(border=True):
+                # Header: ticker + conviction stars + waiting status + expiry
                 st.markdown(
-                    f"**{thesis.ticker}** — convicció {thesis.conviction}/5 &nbsp;|&nbsp; "
-                    f"Esperant senyal RSI/SMA50 &nbsp;|&nbsp; Caduca en {expires_in} dies"
+                    f"**{thesis.ticker}** &nbsp;&nbsp; "
+                    f"{'⭐' * thesis.conviction} ({thesis.conviction}/5) &nbsp;&nbsp; "
+                    f"⏳ Esperant senyal RSI/SMA50 &nbsp;&nbsp; "
+                    f"Caduca en {expires_in} dies"
                 )
-                st.caption(thesis.thesis_text)
+                st.markdown(f"**Tesi:** {thesis.thesis_text}")
+
+                with st.expander("Veure cas bull/bear + invalidació + catalitzadors"):
+                    st.markdown(f"**🐂 Bull case:** {thesis.bull_case}")
+                    st.markdown(f"**🐻 Bear case:** {thesis.bear_case}")
+                    if thesis.invalidates_if:
+                        st.markdown("**🚨 Invalida si:**")
+                        for cond in thesis.invalidates_if:
+                            st.markdown(f"  - {cond}")
+                    if thesis.catalysts:
+                        st.markdown("**⚡ Catalitzadors:**")
+                        for cat in thesis.catalysts:
+                            st.markdown(
+                                f"  - **{cat.get('event', '')}** "
+                                f"({cat.get('expected_date', '?')}): "
+                                f"{cat.get('expected_outcome', '')}"
+                            )
+
+                st.caption(
+                    f"Mida que es proposarà quan triggeri: {size_pct:.0%} "
+                    f"(≈ €{size_eur:.0f})  |  "
+                    f"Horitzó: {thesis.horizon_months} mesos  |  "
+                    f"Creada: {thesis.opened_at.strftime('%d/%m/%Y')}"
+                )
 
     st.divider()
 
@@ -333,22 +373,33 @@ def render_thesis_tab() -> None:
                 f"| {days_active}d activa{stale_flag}{weakening_bar}"
             ):
                 st.markdown(f"**Tesi:** {thesis.thesis_text}")
-                col_bull, col_bear = st.columns(2)
-                with col_bull:
-                    st.markdown(f"🐂 **Bull:** {thesis.bull_case[:300]}...")
-                with col_bear:
-                    st.markdown(f"🐻 **Bear:** {thesis.bear_case[:300]}...")
 
-                if last_review:
-                    st.markdown(
-                        f"**Última revisió** ({last_review.reviewed_at.strftime('%d/%m/%Y')}): "
-                        f"{verdict_emoji} {verdict} — {last_review.new_info_summary[:300]}"
-                    )
+                st.markdown(f"**🐂 Bull case:** {thesis.bull_case}")
+                st.markdown(f"**🐻 Bear case:** {thesis.bear_case}")
 
                 if thesis.invalidates_if:
                     st.markdown("**🚨 Invalida si:**")
                     for cond in thesis.invalidates_if:
                         st.markdown(f"  - {cond}")
+
+                if thesis.catalysts:
+                    st.markdown("**⚡ Catalitzadors:**")
+                    for cat in thesis.catalysts:
+                        st.markdown(
+                            f"  - **{cat.get('event', '')}** "
+                            f"({cat.get('expected_date', '?')}): "
+                            f"{cat.get('expected_outcome', '')}"
+                        )
+
+                if last_review:
+                    st.divider()
+                    st.markdown(
+                        f"**Última revisió** ({last_review.reviewed_at.strftime('%d/%m/%Y')}): "
+                        f"{verdict_emoji} {verdict}"
+                    )
+                    st.caption(last_review.new_info_summary)
+                    if last_review.notes:
+                        st.caption(f"Notes: {last_review.notes}")
 
                 st.caption(
                     f"Horitzó: {thesis.horizon_months} mesos | "
