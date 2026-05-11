@@ -30,8 +30,13 @@ def get_rsi_history(ticker: str, days: int = 60) -> str:
     """
     from analysis import market_data, price_signals
 
-    # Fetch more history than we need — RSI needs ~14 bars to warm up
-    bars = market_data.fetch_bars(ticker, period=f"{max(days * 2, 120)}d")
+    # Fetch more history than we need — RSI needs ~14 bars to warm up.
+    # yfinance can fail (rate limit, network, ticker delisted) — return JSON
+    # error rather than raising so the agent loop survives.
+    try:
+        bars = market_data.fetch_bars(ticker, period=f"{max(days * 2, 120)}d")
+    except Exception as e:
+        return json.dumps({"error": f"Could not fetch price data for {ticker}: {e}"})
     if bars is None or bars.df.empty:
         return json.dumps({"error": f"No price data available for {ticker}"})
 
@@ -99,7 +104,10 @@ def get_market_context(trade_date: str) -> str:
     """
     from analysis import market_data, price_signals
 
-    bars = market_data.fetch_bars("SXR8.DE", period="6mo")
+    try:
+        bars = market_data.fetch_bars("SXR8.DE", period="6mo")
+    except Exception as e:
+        return json.dumps({"error": f"Could not fetch market data for SXR8.DE: {e}"})
     if bars is None or bars.df.empty:
         return json.dumps({"error": "No market data available for SXR8.DE"})
 

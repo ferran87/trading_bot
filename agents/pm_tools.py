@@ -1113,7 +1113,25 @@ TOOL_DEFINITIONS: list[dict] = [
 # ── Dispatcher ────────────────────────────────────────────────────────────────
 
 def dispatch(tool_name: str, tool_input: dict) -> str:
-    """Route a tool call from the agent loop to the correct implementation."""
+    """Route a tool call to the right tool, catching ALL exceptions.
+
+    A single tool failure (e.g. yfinance returns no data, SEC EDGAR is down)
+    must NEVER crash the agent loop. Wrap every dispatch in try/except and
+    return the error as a JSON tool result so Claude can see it, react to
+    it (e.g. skip that ticker, try a different tool), and continue.
+    """
+    try:
+        return _dispatch_inner(tool_name, tool_input)
+    except Exception as e:
+        log.exception("pm_tools.dispatch: tool=%s failed", tool_name)
+        return json.dumps({
+            "error": f"Tool '{tool_name}' raised {type(e).__name__}: {e}",
+            "hint": "Try a different ticker, a different tool, or skip this candidate.",
+        })
+
+
+def _dispatch_inner(tool_name: str, tool_input: dict) -> str:
+    """The actual routing — kept separate so the wrapper can catch everything."""
     if tool_name == "get_universe_tickers":
         return get_universe_tickers()
     if tool_name == "get_active_theses":
