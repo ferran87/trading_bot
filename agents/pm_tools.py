@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone, timedelta
 
 from sqlalchemy.orm import Session
@@ -32,10 +33,67 @@ MIN_INVALIDATION_CONDITIONS = 2   # must pre-commit exit criteria
 MIN_HORIZON_MONTHS = 3            # theses are medium-term by design
 MAX_CONVICTION_STEP_PER_WEEK = 1  # throttle rapid conviction swings
 MIN_HOLD_DAYS_BEFORE_EXIT = 14    # no thesis-driven exit in first 14 days
+MAX_REASONABLE_UPSIDE_PCT = 100   # any "+X%" claim above this is auto-flagged
+IMMEDIATE_ENTRY_CONVICTION = 5    # only conviction 5 bypasses RSI/SMA gate (was 4)
 
 CONVICTION_MULT = {5: 1.5, 4: 1.2, 3: 1.0, 2: 0.8, 1: 0.6}
 BASE_PCT = 0.10    # 10% of bot capital
 MAX_PCT  = 0.15    # hard cap regardless of conviction
+
+# ── Content validation patterns ──────────────────────────────────────────────
+# Forbidden authority appeals — banned to prevent meme-driven theses.
+# (regex: matches whole word, case-insensitive)
+_FORBIDDEN_PATTERNS = [
+    (re.compile(r"\b(jim\s+)?cramer\b", re.IGNORECASE),
+     "Cramer citations are banned (meme, not analysis)"),
+    (re.compile(r"\bwall\s+street\s+(diu|says|mantenint?|holds?)\b", re.IGNORECASE),
+     "Vague 'Wall Street says' phrasing banned — cite a specific tool result"),
+    (re.compile(r"\banalistes?\s+(diuen?|mantenen?|esperen?)\b", re.IGNORECASE),
+     "Vague 'analysts say' phrasing banned — use get_fundamentals for real targets"),
+    (re.compile(r"\bels\s+experts?\s+(diuen|creuen|opinen)\b", re.IGNORECASE),
+     "'Experts say' phrasing banned — cite specific tool data"),
+]
+
+# Pattern to extract numeric "+X%" claims from thesis prose for sanity check
+_PERCENT_CLAIM_RE = re.compile(r"[+\-]?\s*(\d+(?:[\.,]\d+)?)\s*%")
+
+
+def _extract_pct_claims(text: str) -> list[float]:
+    """Return all numeric percentage values found in text (e.g. '+370%' → 370.0)."""
+    out = []
+    for m in _PERCENT_CLAIM_RE.finditer(text):
+        try:
+            out.append(float(m.group(1).replace(",", ".")))
+        except ValueError:
+            continue
+    return out
+
+
+def _validate_content(thesis_text: str, bull_case: str, bear_case: str) -> list[str]:
+    """Return a list of validation errors (empty list if all checks pass).
+
+    Checks:
+    - Forbidden authority appeals (Cramer, vague 'Wall Street says', etc.)
+    - Absurd percentage claims (>100% upside in any prose field)
+    """
+    errors = []
+    full_text = f"{thesis_text}\n{bull_case}\n{bear_case}"
+
+    # Forbidden patterns
+    for pat, msg in _FORBIDDEN_PATTERNS:
+        if pat.search(full_text):
+            errors.append(f"Forbidden content: {msg}")
+
+    # Sanity check on percentage claims
+    pcts = _extract_pct_claims(full_text)
+    absurd = [p for p in pcts if p > MAX_REASONABLE_UPSIDE_PCT]
+    if absurd:
+        errors.append(
+            f"Absurd percentage claim(s) {absurd}: any single % > {MAX_REASONABLE_UPSIDE_PCT} "
+            "is rejected as a likely arithmetic error. Recompute and resubmit."
+        )
+
+    return errors
 
 
 def _utcnow() -> datetime:
@@ -86,6 +144,110 @@ def get_market_context_today() -> str:
     from agents.tools import get_market_context
     from datetime import date
     return get_market_context(str(date.today()))
+
+
+def get_fundamentals(ticker: str) -> str:
+    """Return real fundamental metrics for a ticker from yfinance.
+
+    This tool exists specifically to prevent Claude from hallucinating
+    margins, P/E ratios, market cap, etc. from training-data memory.
+    All numerical claims about the company in the thesis MUST come from
+    a tool result like this one.
+
+    Returns JSON with currency, market cap, valuation ratios, margins,
+    growth rates, current price, 52w range, and dividend yield.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        return json.dumps({"error": "yfinance not installed"})
+
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+    except Exception as e:
+        return json.dumps({"error": f"yfinance fetch failed for {ticker}: {e}"})
+
+    if not info.get("currentPrice") and not info.get("regularMarketPrice"):
+        return json.dumps({
+            "ticker": ticker,
+            "warning": "yfinance returned no price data; fundamentals may be incomplete",
+            "raw_keys_returned": list(info.keys())[:20],
+        })
+
+    def _pct(x):
+        return round(x * 100, 2) if isinstance(x, (int, float)) else None
+
+    return json.dumps({
+        "ticker": ticker,
+        "currency": info.get("currency"),
+        "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
+        "market_cap": info.get("marketCap"),
+        "enterprise_value": info.get("enterpriseValue"),
+        "trailing_pe": info.get("trailingPE"),
+        "forward_pe": info.get("forwardPE"),
+        "peg_ratio": info.get("pegRatio"),
+        "price_to_book": info.get("priceToBook"),
+        "price_to_sales_ttm": info.get("priceToSalesTrailing12Months"),
+        "profit_margin_pct": _pct(info.get("profitMargins")),
+        "operating_margin_pct": _pct(info.get("operatingMargins")),
+        "gross_margin_pct": _pct(info.get("grossMargins")),
+        "ebitda_margin_pct": _pct(info.get("ebitdaMargins")),
+        "revenue_growth_yoy_pct": _pct(info.get("revenueGrowth")),
+        "earnings_growth_yoy_pct": _pct(info.get("earningsGrowth")),
+        "earnings_quarterly_growth_pct": _pct(info.get("earningsQuarterlyGrowth")),
+        "return_on_equity_pct": _pct(info.get("returnOnEquity")),
+        "debt_to_equity": info.get("debtToEquity"),
+        "current_ratio": info.get("currentRatio"),
+        "dividend_yield_pct": _pct(info.get("dividendYield")),
+        "beta": info.get("beta"),
+        "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
+        "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
+        "fifty_day_avg": info.get("fiftyDayAverage"),
+        "two_hundred_day_avg": info.get("twoHundredDayAverage"),
+        "sector": info.get("sector"),
+        "industry": info.get("industry"),
+        "country": info.get("country"),
+    })
+
+
+def get_analyst_targets(ticker: str) -> str:
+    """Return real analyst price targets and recommendations from yfinance.
+
+    Use this instead of citing 'Wall Street targets' from memory.
+    Returns mean/high/low targets, current recommendation key, and
+    number of analysts contributing.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        return json.dumps({"error": "yfinance not installed"})
+
+    try:
+        t = yf.Ticker(ticker)
+        info = t.info or {}
+    except Exception as e:
+        return json.dumps({"error": f"yfinance fetch failed for {ticker}: {e}"})
+
+    current = info.get("currentPrice") or info.get("regularMarketPrice")
+    target_mean = info.get("targetMeanPrice")
+    upside_pct = None
+    if current and target_mean:
+        upside_pct = round((target_mean / current - 1) * 100, 2)
+
+    return json.dumps({
+        "ticker": ticker,
+        "currency": info.get("currency"),
+        "current_price": current,
+        "target_mean": target_mean,
+        "target_high": info.get("targetHighPrice"),
+        "target_low": info.get("targetLowPrice"),
+        "target_median": info.get("targetMedianPrice"),
+        "upside_to_mean_pct": upside_pct,
+        "recommendation_key": info.get("recommendationKey"),
+        "recommendation_mean": info.get("recommendationMean"),  # 1=Strong Buy, 5=Strong Sell
+        "number_of_analyst_opinions": info.get("numberOfAnalystOpinions"),
+    })
 
 
 def get_active_theses() -> str:
@@ -194,6 +356,17 @@ def submit_thesis(
     if not thesis_text.strip():
         return json.dumps({"status": "error", "message": "thesis_text cannot be empty."})
 
+    # ── Content validation (forbidden patterns + math sanity) ────────────────
+    content_errors = _validate_content(thesis_text, bull_case, bear_case)
+    if content_errors:
+        return json.dumps({
+            "status": "error",
+            "message": (
+                "Thesis content failed validation. Fix and resubmit:\n  - "
+                + "\n  - ".join(content_errors)
+            )
+        })
+
     # ── Duplicate check ──────────────────────────────────────────────────────
     with get_session() as s:
         existing = (
@@ -215,7 +388,11 @@ def submit_thesis(
             })
 
     # ── Persist thesis ───────────────────────────────────────────────────────
-    thesis_status = "candidate" if conviction >= 4 else "waiting"
+    # Only conviction >= IMMEDIATE_ENTRY_CONVICTION (5) bypasses the RSI/SMA gate.
+    # Conviction 3-4 → 'waiting': must wait for technical confirmation.
+    # This is conservative: it lets the technical layer catch bad calibrations
+    # in narrative theses (a known failure mode — see ANET 2026-05-10 retrospective).
+    thesis_status = "candidate" if conviction >= IMMEDIATE_ENTRY_CONVICTION else "waiting"
     size = _size_pct(conviction)
 
     with get_session() as s:
@@ -241,8 +418,10 @@ def submit_thesis(
         thesis_id = thesis.id
 
         action_id = None
-        if conviction >= 4:
-            # High conviction: propose immediate entry (user still approves)
+        if conviction >= IMMEDIATE_ENTRY_CONVICTION:
+            # Conviction 5: propose immediate entry (user still approves).
+            # Conviction 3-4: 'waiting' status — no action yet; strategy module
+            # creates an 'open' action when RSI/SMA gate triggers.
             action = ThesisAction(
                 thesis_id=thesis_id,
                 action_type="open",
@@ -268,7 +447,10 @@ def submit_thesis(
     if action_id:
         msg += f" Open action proposed (id={action_id}, size={size*100:.0f}%) — awaiting user approval."
     else:
-        msg += " Status='waiting': will propose entry when RSI/SMA gate triggers (conviction 3)."
+        msg += (
+            f" Status='waiting': will propose entry when RSI/SMA gate triggers "
+            f"(conviction {conviction} < {IMMEDIATE_ENTRY_CONVICTION})."
+        )
 
     log.info("pm_tools.submit_thesis: %s", msg)
     return json.dumps({"status": "ok", "thesis_id": thesis_id, "action_id": action_id, "message": msg})
@@ -526,14 +708,53 @@ TOOL_DEFINITIONS: list[dict] = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "get_fundamentals",
+        "description": (
+            "Returns REAL fundamental metrics for a ticker from yfinance: P/E, margins "
+            "(operating, gross, profit), market cap, revenue growth YoY, debt ratios, "
+            "52-week high/low, sector. CRITICAL: any numerical claim about the company "
+            "in your thesis (margins, P/E, growth rates, market cap) MUST come from a "
+            "tool call like this one. Do NOT cite numbers from memory — your training "
+            "data is months/years stale and will be wrong. Always call this before "
+            "submitting a thesis that mentions any fundamental figure."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker"},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "get_analyst_targets",
+        "description": (
+            "Returns REAL analyst price targets and consensus rating for a ticker "
+            "(target mean/high/low/median, upside-to-mean %, recommendation key, "
+            "number of analysts). Use this instead of citing 'Wall Street targets' "
+            "from memory. The 'upside_to_mean_pct' field gives you the actual upside "
+            "calculation — do not compute your own (recent failure: bot computed +370% "
+            "when actual was +27%, off by an order of magnitude)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker"},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
         "name": "submit_thesis",
         "description": (
             "Validate and persist a new investment thesis for a ticker. "
-            "For conviction ≥ 4: immediately proposes an 'open' action for user approval. "
-            "For conviction = 3: creates a 'waiting' thesis — entry is proposed only when "
+            "For conviction = 5: immediately proposes an 'open' action for user approval. "
+            "For conviction 3-4: creates a 'waiting' thesis — entry proposed only when "
             "RSI/SMA conditions align. For conviction ≤ 2: rejected (too uncertain). "
-            "All fields are validated: bear_case ≥ 100 chars, ≥ 2 invalidation conditions, "
-            "horizon_months ≥ 3. Duplicate active theses for the same ticker are rejected."
+            "All fields validated: bear_case ≥ 100 chars, ≥ 2 invalidation conditions, "
+            "horizon_months ≥ 3. CONTENT VALIDATION (rejected if violated): no Cramer/'Wall Street says'/"
+            "'analysts say' phrasings without specific source; no percentage claims > 100% "
+            "(likely arithmetic error). Duplicate active theses for the same ticker are rejected."
         ),
         "input_schema": {
             "type": "object",
@@ -612,6 +833,10 @@ def dispatch(tool_name: str, tool_input: dict) -> str:
         )
     if tool_name == "get_market_context_today":
         return get_market_context_today()
+    if tool_name == "get_fundamentals":
+        return get_fundamentals(tool_input["ticker"])
+    if tool_name == "get_analyst_targets":
+        return get_analyst_targets(tool_input["ticker"])
     if tool_name == "submit_thesis":
         return submit_thesis(
             ticker=tool_input["ticker"],

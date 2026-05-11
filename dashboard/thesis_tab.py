@@ -62,18 +62,27 @@ def _decide_action(action_id: int, decision: str, decided_by: str = "user") -> N
         action.status = decision
         action.decided_at = _utcnow()
 
-        # If approved 'open': move thesis to 'active'
-        if decision == "approved" and action.action_type == "open":
-            thesis = s.query(Thesis).filter(Thesis.id == action.thesis_id).first()
-            if thesis and thesis.status in ("candidate", "waiting"):
-                thesis.status = "active"
+        thesis = s.query(Thesis).filter(Thesis.id == action.thesis_id).first()
 
-        # If approved 'exit': thesis stays 'invalidated' (was set by pm_tools)
-        # If rejected 'exit': revert thesis to 'active'
-        if decision == "rejected" and action.action_type == "exit":
-            thesis = s.query(Thesis).filter(Thesis.id == action.thesis_id).first()
-            if thesis and thesis.status == "invalidated":
-                thesis.status = "active"
+        if thesis is not None:
+            if decision == "approved" and action.action_type == "open":
+                # Approved entry: position will be opened by strategy module on next run
+                if thesis.status in ("candidate", "waiting"):
+                    thesis.status = "active"
+
+            elif decision == "rejected" and action.action_type == "open":
+                # Rejected entry: close the thesis entirely (no orphan candidates).
+                # User explicitly said "no" — don't keep the thesis around.
+                thesis.status = "exited"
+                thesis.closed_at = _utcnow()
+
+            elif decision == "rejected" and action.action_type == "exit":
+                # Rejected exit: revert thesis back to active
+                if thesis.status == "invalidated":
+                    thesis.status = "active"
+
+            # Approved 'exit' / 'add' / 'reduce': thesis status unchanged here;
+            # strategy module handles position-level changes on next run.
 
         s.commit()
 
