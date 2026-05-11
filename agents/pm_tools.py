@@ -178,6 +178,22 @@ def get_fundamentals(ticker: str) -> str:
     def _pct(x):
         return round(x * 100, 2) if isinstance(x, (int, float)) else None
 
+    # Earnings calendar (next reporting date + EPS / revenue estimates)
+    next_earnings_date = None
+    eps_estimate_avg = None
+    revenue_estimate_avg = None
+    is_estimate = None
+    try:
+        cal = t.calendar or {}
+        dates = cal.get("Earnings Date") or []
+        if dates:
+            next_earnings_date = str(dates[0])
+        eps_estimate_avg = cal.get("Earnings Average")
+        revenue_estimate_avg = cal.get("Revenue Average")
+        is_estimate = info.get("isEarningsDateEstimate")
+    except Exception:
+        pass
+
     return json.dumps({
         "ticker": ticker,
         "currency": info.get("currency"),
@@ -208,6 +224,71 @@ def get_fundamentals(ticker: str) -> str:
         "sector": info.get("sector"),
         "industry": info.get("industry"),
         "country": info.get("country"),
+        # Earnings calendar
+        "next_earnings_date": next_earnings_date,
+        "next_earnings_eps_estimate": eps_estimate_avg,
+        "next_earnings_revenue_estimate": revenue_estimate_avg,
+        "next_earnings_date_is_estimate": is_estimate,
+    })
+
+
+def get_recent_earnings_history(ticker: str, quarters: int = 8) -> str:
+    """Return historical EPS estimates vs actuals for the last N quarters.
+
+    Returns the beat/miss pattern Claude needs to assess management's
+    track record:
+      - "Beat estimates 7 of last 8 quarters" → genuine outperformance signal
+      - "Average surprise +9%" → consistent beats, likely sandbagging guidance
+
+    Each row: earnings date, EPS estimate, reported EPS, surprise %.
+    Most recent first. The next (upcoming) date will have estimate but
+    no reported value yet.
+    """
+    try:
+        import yfinance as yf
+    except ImportError:
+        return json.dumps({"error": "yfinance not installed"})
+
+    try:
+        t = yf.Ticker(ticker)
+        df = t.earnings_dates
+    except Exception as e:
+        return json.dumps({"error": f"yfinance earnings_dates failed for {ticker}: {e}"})
+
+    if df is None or df.empty:
+        return json.dumps({"ticker": ticker, "message": "No earnings history available."})
+
+    df = df.head(quarters).copy()
+
+    rows = []
+    for idx, row in df.iterrows():
+        rows.append({
+            "earnings_date": str(idx.date()) if hasattr(idx, "date") else str(idx),
+            "eps_estimate": float(row["EPS Estimate"]) if row["EPS Estimate"] == row["EPS Estimate"] else None,
+            "reported_eps": float(row["Reported EPS"]) if row["Reported EPS"] == row["Reported EPS"] else None,
+            "surprise_pct": float(row["Surprise(%)"]) if row["Surprise(%)"] == row["Surprise(%)"] else None,
+        })
+
+    # Aggregate beat/miss stats over the reported quarters only
+    reported = [r for r in rows if r["reported_eps"] is not None and r["eps_estimate"] is not None]
+    beats = sum(1 for r in reported if r["reported_eps"] > r["eps_estimate"])
+    misses = sum(1 for r in reported if r["reported_eps"] < r["eps_estimate"])
+    inline = len(reported) - beats - misses
+    avg_surprise = (
+        round(sum(r["surprise_pct"] for r in reported if r["surprise_pct"] is not None)
+              / max(1, len([r for r in reported if r["surprise_pct"] is not None])), 2)
+        if reported else None
+    )
+
+    return json.dumps({
+        "ticker": ticker,
+        "quarters_returned": len(rows),
+        "quarters_with_results": len(reported),
+        "beats": beats,
+        "misses": misses,
+        "inline": inline,
+        "average_surprise_pct": avg_surprise,
+        "history": rows,
     })
 
 
@@ -745,6 +826,30 @@ TOOL_DEFINITIONS: list[dict] = [
         },
     },
     {
+        "name": "get_recent_earnings_history",
+        "description": (
+            "Returns the last N quarters of EPS estimates vs reported actuals for "
+            "a ticker, plus aggregate beat/miss stats and average surprise %. Use "
+            "this to assess management's track record: a company that has beaten "
+            "estimates 7 of 8 quarters with +9% average surprise has real momentum; "
+            "one that misses regularly does not. The next upcoming earnings date "
+            "appears with an estimate but no reported value yet — useful for the "
+            "catalysts field. Default 8 quarters (2 years)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker"},
+                "quarters": {
+                    "type": "integer",
+                    "description": "How many quarters of history to return. Default 8.",
+                    "default": 8,
+                },
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
         "name": "submit_thesis",
         "description": (
             "Validate and persist a new investment thesis for a ticker. "
@@ -837,6 +942,11 @@ def dispatch(tool_name: str, tool_input: dict) -> str:
         return get_fundamentals(tool_input["ticker"])
     if tool_name == "get_analyst_targets":
         return get_analyst_targets(tool_input["ticker"])
+    if tool_name == "get_recent_earnings_history":
+        return get_recent_earnings_history(
+            tool_input["ticker"],
+            tool_input.get("quarters", 8),
+        )
     if tool_name == "submit_thesis":
         return submit_thesis(
             ticker=tool_input["ticker"],
