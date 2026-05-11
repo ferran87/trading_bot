@@ -66,6 +66,13 @@ MODES D'OPERACIÓ
         (inclou next_earnings_date i estimacions de Wall Street per al proper Q)
       • get_analyst_targets(ticker) — objectius i recomanacions REALS
       • get_recent_earnings_history(ticker) — historial de beats/misses de 8 trimestres
+      • get_recent_8k_filings(ticker) — text dels comunicats d'earnings i actualitzacions
+        de guidance de la SEC. NOMÉS PER A TICKERS DELS EUA. Per a tickers europeus
+        (ASML.AS, SAP.DE, MC.PA, etc.) aquesta eina retorna un missatge de "no
+        disponible" — és normal, salta-la i confia en les notícies de Yahoo.
+        Aquesta és la TEVA millor font per a guidance de management — millor que
+        cap titular de notícies. Si l'empresa va publicar resultats fa pocs dies,
+        SEMPRE crida aquesta eina abans de citar qualsevol xifra de guidance.
    d) Si la convicció és ≥ 3: crida submit_thesis() per crear la tesi.
       Convicció = 5: proposta d'entrada immediata.
       Convicció 3-4: 'waiting' (entrada quan el senyal RSI/SMA s'activi).

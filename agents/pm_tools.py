@@ -232,6 +232,168 @@ def get_fundamentals(ticker: str) -> str:
     })
 
 
+# ── SEC EDGAR 8-K filings ─────────────────────────────────────────────────────
+# Companies file 8-Ks for material events (earnings, guidance updates, M&A,
+# leadership changes). The earnings release is attached as Exhibit 99.1 and
+# usually contains forward guidance numbers in prose form. This tool gives
+# Claude direct access to that text instead of relying on Yahoo News headlines.
+#
+# US-only: SEC EDGAR covers US-listed companies. European tickers (with .AS,
+# .DE, .PA, .SW, .L suffixes) are detected and skipped.
+
+_EU_SUFFIXES = (".AS", ".DE", ".PA", ".SW", ".L", ".MI", ".MC", ".BR", ".AT", ".OL", ".HE", ".ST", ".CO")
+_EDGAR_IDENTITY_SET = False
+
+
+def _ensure_edgar_identity() -> None:
+    """SEC requires a User-Agent identity for API access. Set it once."""
+    global _EDGAR_IDENTITY_SET
+    if _EDGAR_IDENTITY_SET:
+        return
+    try:
+        from edgar import set_identity
+        # SEC requires "Name email" — uses CLAUDE.md userEmail
+        set_identity("Ferran Punso ferranpunso@gmail.com")
+        _EDGAR_IDENTITY_SET = True
+    except ImportError:
+        log.warning("edgartools not installed; SEC EDGAR access disabled")
+
+
+def get_recent_8k_filings(ticker: str, days: int = 90, limit: int = 5) -> str:
+    """Return recent SEC 8-K filings for a US-listed ticker.
+
+    For each filing returned:
+      - filing_date
+      - items (SEC item codes — e.g. '2.02' = Results of Operations,
+        '7.01' = Reg FD Disclosure, '8.01' = Other Events, '9.01' = Exhibits)
+      - url
+      - has_earnings: True if the filing includes an earnings release
+      - earnings_text: truncated markdown of the earnings press release
+        (only present when has_earnings=True). Up to ~3500 chars — usually
+        contains the Q's headline numbers, segment commentary, AND forward
+        guidance (revenue/EPS/margin targets for next Q or full year).
+      - key_metrics: structured revenue / net income / EPS dict where
+        edgartools could extract them.
+
+    Non-US tickers (with EU suffixes) return a clear message rather than data.
+
+    The agent should call this for any thesis on a US large/mid-cap when the
+    next_earnings_date is within the horizon, OR when news headlines mention
+    'guidance', 'reaffirms', 'raises', 'lowers' — those words usually trace
+    back to an 8-K worth reading.
+    """
+    if not ticker or any(ticker.upper().endswith(suf) for suf in _EU_SUFFIXES):
+        return json.dumps({
+            "ticker": ticker,
+            "message": (
+                f"{ticker} is not US-listed (SEC EDGAR is US-only). "
+                "For European tickers, rely on news headlines via get_ticker_analysis."
+            ),
+        })
+
+    try:
+        from edgar import Company
+    except ImportError:
+        return json.dumps({"error": "edgartools not installed"})
+
+    _ensure_edgar_identity()
+
+    try:
+        company = Company(ticker)
+        if company is None or not company.cik:
+            return json.dumps({"error": f"Could not resolve {ticker} on SEC EDGAR"})
+    except Exception as e:
+        return json.dumps({"error": f"SEC company lookup failed for {ticker}: {e}"})
+
+    # Pull a generous window then filter by date in Python
+    from datetime import date, timedelta
+    cutoff = date.today() - timedelta(days=days)
+
+    try:
+        all_filings = company.get_filings(form="8-K").head(max(limit * 4, 20))
+    except Exception as e:
+        return json.dumps({"error": f"SEC filings fetch failed for {ticker}: {e}"})
+
+    rows = []
+    for f in all_filings:
+        if len(rows) >= limit:
+            break
+        try:
+            f_date = f.filing_date
+            if hasattr(f_date, "date"):
+                f_date = f_date.date()
+            if f_date < cutoff:
+                continue
+
+            row = {
+                "filing_date": str(f_date),
+                "items": getattr(f, "items", None) or "",
+                "url": getattr(f, "filing_url", None) or "",
+                "has_earnings": False,
+                "earnings_text": None,
+                "key_metrics": None,
+            }
+
+            # Try parsing as CurrentReport (8-K type)
+            try:
+                obj = f.obj()
+                if getattr(obj, "has_earnings", False):
+                    row["has_earnings"] = True
+                    er = obj.earnings
+                    # Earnings press release as markdown (cleaner than raw text)
+                    try:
+                        att = er.attachment
+                        md = att.markdown() if hasattr(att, "markdown") else None
+                        if not md and hasattr(att, "text"):
+                            md = att.text()
+                        if md:
+                            # Truncate aggressively — Claude doesn't need the
+                            # 30+ pages of footnotes; the headline + guidance
+                            # paragraphs are in the first ~3500 chars.
+                            row["earnings_text"] = (md[:3500] + "\n... [truncated]"
+                                                    if len(md) > 3500 else md)
+                    except Exception as _:
+                        pass
+
+                    # Structured key metrics: only keep the fields that
+                    # edgartools extracts reliably (period + EPS). Revenue
+                    # / net_income come back with broken scales (e.g. 7.0
+                    # for $2.709B) — better to omit than mislead. Claude
+                    # should read the actual numbers from earnings_text.
+                    try:
+                        km = er.get_key_metrics() or {}
+                        eps = km.get("eps_diluted") or km.get("eps_basic")
+                        period = km.get("period")
+                        if eps is not None or period:
+                            row["key_metrics"] = {
+                                "eps_diluted": eps,
+                                "period": period,
+                                "_note": "Revenue/net_income omitted — edgartools auto-extractor is unreliable for those fields. Read earnings_text for the real figures.",
+                            }
+                    except Exception:
+                        pass
+            except Exception:
+                # Some 8-Ks aren't earnings-related — that's fine, just skip parsing
+                pass
+
+            rows.append(row)
+        except Exception as e:
+            log.debug("8-K row failed: %s", e)
+            continue
+
+    if not rows:
+        return json.dumps({
+            "ticker": ticker,
+            "message": f"No 8-K filings in the last {days} days for {ticker}.",
+        })
+
+    return json.dumps({
+        "ticker": ticker,
+        "lookback_days": days,
+        "filings": rows,
+    })
+
+
 def get_recent_earnings_history(ticker: str, quarters: int = 8) -> str:
     """Return historical EPS estimates vs actuals for the last N quarters.
 
@@ -826,6 +988,32 @@ TOOL_DEFINITIONS: list[dict] = [
         },
     },
     {
+        "name": "get_recent_8k_filings",
+        "description": (
+            "Returns recent SEC 8-K filings for a US-listed ticker (US ONLY — "
+            "European tickers like ASML.AS, SAP.DE return a 'not US-listed' "
+            "message and you should rely on get_ticker_analysis news headlines "
+            "for them). For each 8-K: filing date, SEC item codes (2.02 = "
+            "Results of Operations, 7.01 = Reg FD Disclosure / guidance, "
+            "8.01 = Other Events), and when the filing is an earnings release, "
+            "the actual press release text including any forward guidance "
+            "language ('We expect Q3 revenue of $2.8B...'). This is the most "
+            "authoritative source you have for management guidance — way "
+            "better than Yahoo News headlines. Use this whenever the next "
+            "earnings date is in the recent past, OR when news headlines "
+            "mention 'guidance', 'reaffirms', 'raises', 'lowers'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "US stock ticker"},
+                "days":   {"type": "integer", "description": "Lookback window in days. Default 90.", "default": 90},
+                "limit":  {"type": "integer", "description": "Max filings to return. Default 5.", "default": 5},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
         "name": "get_recent_earnings_history",
         "description": (
             "Returns the last N quarters of EPS estimates vs reported actuals for "
@@ -946,6 +1134,12 @@ def dispatch(tool_name: str, tool_input: dict) -> str:
         return get_recent_earnings_history(
             tool_input["ticker"],
             tool_input.get("quarters", 8),
+        )
+    if tool_name == "get_recent_8k_filings":
+        return get_recent_8k_filings(
+            tool_input["ticker"],
+            tool_input.get("days", 90),
+            tool_input.get("limit", 5),
         )
     if tool_name == "submit_thesis":
         return submit_thesis(
