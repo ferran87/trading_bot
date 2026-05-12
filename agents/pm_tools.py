@@ -100,6 +100,20 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _as_aware(dt: datetime | None) -> datetime | None:
+    """Normalize a datetime to UTC-aware.
+
+    Postgres TIMESTAMP (without TZ) round-trips through SQLAlchemy as naive,
+    but ``_utcnow()`` returns aware — subtracting them raises TypeError.
+    Always pass DB datetimes through this before doing arithmetic with now.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt
+
+
 def _size_pct(conviction: int) -> float:
     raw = BASE_PCT * CONVICTION_MULT.get(conviction, 1.0)
     return round(min(raw, MAX_PCT), 4)
@@ -746,7 +760,7 @@ def submit_review(
                     )
                 })
             if thesis.conviction_last_changed_at:
-                days_since_change = (now - thesis.conviction_last_changed_at).days
+                days_since_change = (now - _as_aware(thesis.conviction_last_changed_at)).days
                 if days_since_change < 7:
                     return json.dumps({
                         "status": "error",
@@ -766,7 +780,7 @@ def submit_review(
         # 'invalidated' doesn't affect the counter
 
         # ── Hold floor ───────────────────────────────────────────────────────
-        hold_days = (now - thesis.opened_at).days
+        hold_days = (now - _as_aware(thesis.opened_at)).days
         action_id = None
         action_note = ""
 

@@ -273,8 +273,10 @@ class AiThesisStrategy(Strategy):
             for thesis in waiting:
                 ticker = thesis.ticker
 
-                # Expire if waiting more than 30 days
-                days_waiting = (datetime.now(timezone.utc) - thesis.opened_at).days
+                # Expire if waiting more than 30 days.
+                # opened_at may be naive from Postgres — coerce to aware before subtracting.
+                opened_aware = thesis.opened_at if thesis.opened_at.tzinfo else thesis.opened_at.replace(tzinfo=timezone.utc)
+                days_waiting = (datetime.now(timezone.utc) - opened_aware).days
                 if days_waiting > 30:
                     thesis.status = "exited"
                     thesis.closed_at = datetime.now(timezone.utc)
