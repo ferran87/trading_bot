@@ -241,6 +241,66 @@ class RuleChangeLog(Base):
 # Theses are stable by design (horizon ≥ 3 months, conviction throttled).
 # See docs/DECISIONS.md and the plan in .claude/plans/ for full rationale.
 
+# Phase 4 (theme-driven analyst architecture) layers on top of Phase 2:
+# Theme = user-approved durable narrative (2-3 year horizon).
+# Thesis is now a per-stock analysis WITHIN a theme (Thesis.theme_id FK).
+# See plan section "PHASE 4 — Theme-driven analyst architecture".
+
+class Theme(Base):
+    """A durable investment narrative proposed by the Strategist agent.
+
+    Themes are user-owned: the agent proposes them, the user approves and
+    edits importance/potential.  Once active, the agent NEVER modifies the
+    rating fields — only the user can. Agent can surface informational
+    review notes (separate ThemeReviewNote table — TBD) but those don't
+    change anything programmatically.
+    """
+
+    __tablename__ = "themes"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)             # e.g. "Hyperscaler power demand surge"
+    narrative_text = Column(Text, nullable=False)     # 2-3 paragraph macro/tech argument
+    horizon_years = Column(Integer, nullable=False, default=3)
+
+    # User-owned ratings (1-5). Strategist proposes initial values; only user edits.
+    importance = Column(Integer, nullable=False, default=3)
+    potential  = Column(Integer, nullable=False, default=3)
+
+    candidate_tickers = Column(JSON, nullable=False, default=list)   # ['CEG','VST','GEV',...]
+    invalidators = Column(JSON, nullable=False, default=list)        # what would falsify the theme
+
+    status = Column(String, nullable=False, default="proposed", index=True)
+    # 'proposed' — strategist proposed, awaiting user approval
+    # 'active'   — user approved; analyst evaluates candidates within
+    # 'archived' — user retired (theme played out / falsified / lost interest)
+
+    proposed_at = Column(DateTime, nullable=False, default=utcnow, index=True)
+    approved_at = Column(DateTime, nullable=True)
+    archived_at = Column(DateTime, nullable=True)
+    created_by = Column(String, nullable=False, default="strategist")  # 'strategist' | 'user'
+    user_notes = Column(Text, nullable=True)
+
+
+class ThemeStockProposal(Base):
+    """The Analyst agent suggesting a new candidate ticker for an active theme.
+
+    Until approved, the analyst CANNOT write a Thesis for this ticker under
+    the theme. User approval adds the ticker to Theme.candidate_tickers.
+    """
+
+    __tablename__ = "theme_stock_proposals"
+
+    id = Column(Integer, primary_key=True)
+    theme_id = Column(Integer, ForeignKey("themes.id"), nullable=False, index=True)
+    ticker = Column(String, nullable=False)
+    rationale = Column(Text, nullable=False)            # why this fits the theme
+    proposed_at = Column(DateTime, nullable=False, default=utcnow, index=True)
+    status = Column(String, nullable=False, default="pending", index=True)
+    # 'pending' | 'approved' | 'rejected'
+    decided_at = Column(DateTime, nullable=True)
+
+
 class Thesis(Base):
     """A medium-term investment narrative for a single ticker.
 
@@ -285,6 +345,14 @@ class Thesis(Base):
 
     # Risk cap
     max_position_pct = Column(Float, nullable=False, default=0.15)  # ≤ 15% of bot capital
+
+    # ── Phase 4: theme linkage and analyst-frame fields ───────────────────
+    # All nullable so legacy theses (Phase 2 era, no theme) keep working.
+    # See scripts/migrations/phase4_thesis_columns.sql for the Supabase DDL.
+    theme_id = Column(Integer, ForeignKey("themes.id"), nullable=True, index=True)
+    positioning_vs_theme = Column(Text, nullable=True)  # how this stock benefits from the theme
+    execution_evidence   = Column(Text, nullable=True)  # what 8-K/earnings show about execution
+    valuation_assessment = Column(Text, nullable=True)  # is the price right? (cites real metrics)
 
     # Tracking
     realized_pnl_eur = Column(Float, nullable=True)
