@@ -56,7 +56,7 @@ def main() -> None:
     else:
         summary = review_existing_themes()
 
-    print("\n── Strategist summary ───────────────────────────")
+    print("\n--- Strategist summary ---")
     print(json.dumps(summary, indent=2, ensure_ascii=False))
 
     if summary.get("errors"):
