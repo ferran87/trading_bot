@@ -22,6 +22,7 @@ from dashboard.backtest import render_backtest_tab  # noqa: E402
 from dashboard.readme_tab import render_readme_tab  # noqa: E402
 from dashboard.strategy_lab_tab import render_strategy_lab_tab  # noqa: E402
 from dashboard.thesis_tab import render_thesis_tab  # noqa: E402
+from dashboard.themes_tab import render_themes_tab  # noqa: E402
 from dashboard.kpis import _kpis_for  # noqa: E402
 from dashboard.queries import (  # noqa: E402
     _closed_positions,
@@ -1151,12 +1152,13 @@ if owner_all_bots.empty:
 n_paper = int(paper_all["enabled"].sum())
 n_live  = int(live_all["enabled"].sum())
 
-tab_readme, tab_paper, tab_live, tab_bt, tab_lab, tab_thesis = st.tabs([
+tab_readme, tab_paper, tab_live, tab_bt, tab_lab, tab_themes, tab_thesis = st.tabs([
     "📖 Guia",
     f"🧪 Paper Trading ({n_paper} bot{'s' if n_paper != 1 else ''})",
     f"💶 En Viu ({n_live} bot{'s' if n_live != 1 else ''})",
     "📊 Backtest",
     "🧪 Laboratori d'estratègies",
+    "📚 Temes",
     "🧠 Tesis d'inversió",
 ])
 
@@ -1220,6 +1222,10 @@ with tab_readme:
 # ── Strategy Lab tab ───────────────────────────────────────────────────────────
 with tab_lab:
     render_strategy_lab_tab()
+
+# ── Themes tab (Phase 4 — Strategist) ─────────────────────────────────────────
+with tab_themes:
+    render_themes_tab()
 
 # ── AI Thesis Bot tab ──────────────────────────────────────────────────────────
 with tab_thesis:

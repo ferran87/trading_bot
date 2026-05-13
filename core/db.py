@@ -301,6 +301,24 @@ class ThemeStockProposal(Base):
     decided_at = Column(DateTime, nullable=True)
 
 
+class ThemeReviewNote(Base):
+    """Informational observation produced by the Strategist's 'review existing
+    themes' mode. Surfaces notable developments but never modifies the theme
+    (importance/potential are user-owned). User reads and either edits the
+    theme manually or dismisses the note.
+    """
+
+    __tablename__ = "theme_review_notes"
+
+    id = Column(Integer, primary_key=True)
+    theme_id = Column(Integer, ForeignKey("themes.id"), nullable=False, index=True)
+    created_at = Column(DateTime, nullable=False, default=utcnow, index=True)
+    observation = Column(Text, nullable=False)        # what the strategist noticed
+    recommendation = Column(Text, nullable=False)     # suggested action ('archive', 'lower importance to 3', etc.)
+    severity = Column(String, nullable=False, default="info")  # 'info' | 'warning' | 'critical'
+    status = Column(String, nullable=False, default="unread", index=True)  # 'unread' | 'read' | 'dismissed'
+
+
 class Thesis(Base):
     """A medium-term investment narrative for a single ticker.
 
