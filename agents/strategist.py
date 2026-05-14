@@ -53,18 +53,30 @@ Flux:
      b) Crida submit_theme_proposal(...) per persistir el tema.
   5. Proposa entre 4 i 5 temes nous i COMPLEMENTARIS.
 
+Format OBLIGATORI de la narrativa (narrative_text):
+La narrative_text ha de tenir EXACTAMENT aquesta estructura, en markdown:
+
+[2-3 frases sobre el canvi estructural i per què ara. Directe, sense farciment.
+ Preferiblement amb una dada concreta si l'has verificada amb les eines.]
+
+**Importància X/5:** [1 frase. Explica per què X i no X-1 ni X+1. Factors vàlids:
+ mida de mercat afectat, velocitat del canvi, nombre d'empreses desplaçades,
+ irreversibilitat regulatòria o tecnològica, caràcter transformacional.]
+
+**Potencial X/5:** [1 frase. Explica l'upside per als guanyadors. Factors vàlids:
+ creixement d'ingressos dels candidats principals, distància a objectiu d'analista
+ (si ho has verificat), múltiple de valoració vs sector, TAM accessible.]
+
+Total: 300-600 caràcters. Sense frases buides ("és un tema important",
+"les empreses s'estan adaptant", "el mercat creixerà significativament").
+
 Regles fermes:
   • Els temes han de ser DIVERSOS — no 5 variacions d'IA. Cobreix almenys 3 sectors
     o tendències tecnològiques clarament diferenciades.
   • Els tickers candidats han d'existir a l'univers (l'eina ho valida).
   • Els invalidators han de ser MESURABLES i amb una probabilitat real (≥10%) durant
-    l'horitzó.  "Si el tema no s'acompleix" NO és un invalidator vàlid.
-  • Importància (1-5): quant gran és el canvi estructural?
-  • Potencial (1-5): quant upside per als guanyadors si el tema es materialitza?
-  • No calculi % de rendibilitat — el potencial és qualitatiu (1-5).
-  • La narrativa ha de tenir com a mínim 200 caràcters i explicar el "per què ara".
-  • Prohibit citar Jim Cramer, "Wall Street diu" o frases similars d'autoritat sense
-    font específica.
+    l'horitzó. "Si el tema no s'acompleix" NO és un invalidator vàlid.
+  • Prohibit citar Jim Cramer, "Wall Street diu" o frases similars d'autoritat.
   • Prohibit afirmar que una acció o sector pujarà "X%" — el potencial és 1-5.
 
 ════════════════════════════════════════

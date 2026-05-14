@@ -140,51 +140,61 @@ def _run_strategist_subprocess(mode: str) -> None:
 # ── Section renderers ─────────────────────────────────────────────────────────
 
 def _render_pending_proposals(proposals: list[Theme]) -> None:
-    st.subheader(f"📬 Propostes pendents del Strategist ({len(proposals)})")
-    if not proposals:
+    # Sort by potential descending, then importance as tiebreaker
+    sorted_proposals = sorted(proposals, key=lambda t: (t.potential, t.importance), reverse=True)
+
+    st.subheader(f"📬 Propostes pendents ({len(sorted_proposals)}) — ordenades per potencial")
+    if not sorted_proposals:
         st.info("Cap proposta pendent. Prem 'Proposar nous temes' per generar-ne.")
         return
 
-    for t in proposals:
+    for t in sorted_proposals:
         tickers = t.candidate_tickers or []
         invalidators = t.invalidators or []
         with st.container(border=True):
-            col_title, col_approve, col_reject = st.columns([6, 1, 1])
-            with col_title:
-                st.markdown(
-                    f"**{t.name}** &nbsp; "
-                    f"Imp {t.importance}/5 · Pot {t.potential}/5 · "
-                    f"Horitzó {t.horizon_years}a"
-                )
+            # Header row: rank badges + title
+            pot_stars = "⭐" * t.potential
+            imp_color = "🔴" if t.importance >= 5 else ("🟠" if t.importance >= 4 else "🟡")
+            st.markdown(
+                f"### {t.name}  \n"
+                f"{pot_stars} &nbsp; Potencial **{t.potential}/5** &nbsp;·&nbsp; "
+                f"{imp_color} Importància **{t.importance}/5** &nbsp;·&nbsp; "
+                f"Horitzó **{t.horizon_years}a**"
+            )
+
+            # Narrative — the agent formats this with bold Importància/Potencial sections
+            st.markdown(t.narrative_text)
+
+            with st.expander("📋 Candidats + invalidadors"):
+                st.markdown(f"**Candidats ({len(tickers)}):** {', '.join(tickers)}")
+                if invalidadors := invalidators:
+                    st.markdown("**Invalida el tema si:**")
+                    for inv in invalidadors:
+                        st.markdown(f"  - {inv}")
+
+            st.caption(f"Proposat el {_fmt_date(t.proposed_at)}")
+
+            # Explicit action buttons at the bottom, full-width labeled
+            col_approve, col_reject, col_spacer = st.columns([2, 2, 3])
             with col_approve:
-                if st.button("✅", key=f"approve_theme_{t.id}", help="Aprovar tema"):
+                if st.button(
+                    "✅ Aprovar tema",
+                    key=f"approve_theme_{t.id}",
+                    use_container_width=True,
+                    type="primary",
+                ):
                     _approve_theme(t.id)
                     st.success(f"'{t.name}' activat.")
                     st.rerun()
             with col_reject:
-                if st.button("❌", key=f"reject_theme_{t.id}", help="Rebutjar tema"):
+                if st.button(
+                    "❌ Rebutjar proposta",
+                    key=f"reject_theme_{t.id}",
+                    use_container_width=True,
+                ):
                     _reject_theme(t.id)
                     st.info(f"'{t.name}' arxivat.")
                     st.rerun()
-
-            st.markdown(f"_{t.narrative_text}_")
-
-            col_imp, col_pot = st.columns(2)
-            col_imp.caption(
-                f"**Importància:** {_IMPORTANCE_LABELS.get(t.importance, str(t.importance))}"
-            )
-            col_pot.caption(
-                f"**Potencial:** {_POTENTIAL_LABELS.get(t.potential, str(t.potential))}"
-            )
-
-            with st.expander("Candidats + invalidadors"):
-                st.markdown(f"**Candidats ({len(tickers)}):** {', '.join(tickers)}")
-                if invalidators:
-                    st.markdown("**Invalida el tema si:**")
-                    for inv in invalidators:
-                        st.markdown(f"  - {inv}")
-
-            st.caption(f"Proposat el {_fmt_date(t.proposed_at)}")
 
 
 def _render_review_notes(notes: list[ThemeReviewNote], themes_by_id: dict[int, Theme]) -> None:
@@ -232,26 +242,30 @@ def _render_review_notes(notes: list[ThemeReviewNote], themes_by_id: dict[int, T
 
 
 def _render_active_themes(themes: list[Theme]) -> None:
-    st.subheader(f"📚 Temes actius ({len(themes)})")
-    if not themes:
+    sorted_themes = sorted(themes, key=lambda t: (t.potential, t.importance), reverse=True)
+    st.subheader(f"📚 Temes actius ({len(sorted_themes)}) — ordenats per potencial")
+    if not sorted_themes:
         st.info(
             "Cap tema actiu. Prem 'Proposar nous temes' per generar propostes "
             "del Strategist, o aproveu les propostes pendents de dalt."
         )
         return
 
-    for t in themes:
+    for t in sorted_themes:
         tickers     = t.candidate_tickers or []
         invalidators = t.invalidators or []
         theses      = _theses_for_theme(t.id)
 
         with st.container(border=True):
-            hcol1, hcol2 = st.columns([4, 1])
+            hcol1, hcol2 = st.columns([5, 1])
             with hcol1:
+                pot_stars = "⭐" * t.potential
+                imp_color = "🔴" if t.importance >= 5 else ("🟠" if t.importance >= 4 else "🟡")
                 st.markdown(
-                    f"### {t.name}\n"
-                    f"Imp **{t.importance}/5** · Pot **{t.potential}/5** · "
-                    f"Horitzó **{t.horizon_years}a** · "
+                    f"### {t.name}  \n"
+                    f"{pot_stars} &nbsp; Potencial **{t.potential}/5** &nbsp;·&nbsp; "
+                    f"{imp_color} Importància **{t.importance}/5** &nbsp;·&nbsp; "
+                    f"Horitzó **{t.horizon_years}a** &nbsp;·&nbsp; "
                     f"Aprovat {_fmt_date(t.approved_at)}"
                 )
             with hcol2:
@@ -384,7 +398,7 @@ def render_themes_tab() -> None:
     with get_session() as s:
         all_themes: list[Theme] = (
             s.query(Theme)
-            .order_by(Theme.proposed_at.desc())
+            .order_by(Theme.potential.desc(), Theme.importance.desc(), Theme.proposed_at.desc())
             .all()
         )
 
