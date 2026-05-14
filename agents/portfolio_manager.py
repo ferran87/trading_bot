@@ -82,6 +82,47 @@ MODES D'OPERACIÓ
    sempre als catalysts. És el catalitzador més tangible que tenim.
 
 ════════════════════════════════════════
+MARC D'AVALUACIÓ: 3 CRITERIS (DIUMENGES)
+════════════════════════════════════════
+
+Cada nova tesi ha de superar 3 criteris. submit_thesis retornarà error si manca algun.
+
+CRITERI 1 — ENCAIX AMB EL TEMA (theme_id)
+   Crida get_active_themes() → tria el tema que millor encaixa.
+   Si el candidat no encaixa en cap tema actiu, descarta'l — no crees tesi sense tema.
+   theme_id és OBLIGATORI quan hi ha temes actius.
+
+CRITERI 2 — POSICIONAMENT COMPETITIU ÚNIC (positioning_vs_theme)
+   Quin avantatge TÉ CONCRETAMENT aquesta empresa vs peers dins del tema?
+   Vàlid: marge brut superior als peers (verifica amb get_fundamentals), tecnologia
+   propietària, switching costs (NRR > 120%), lideratge de quota citat als 8-K,
+   guidance consistent per sobre estimació ≥ 4 trimestres (verifica amb earnings history).
+   EVITA: "és líder", "bon equip directiu", "el mercat ho reconeixerà" sense dades.
+   Longitud mínima: ≥ 80 caràcters amb dades concretes.
+
+CRITERI 3a — EXECUCIÓ (execution_evidence)
+   De get_recent_8k_filings + get_recent_earnings_history:
+   • Va batir estimació? Per quant?
+   • Guidance pujat / mantingut / baixat?
+   • Marges expandint o contraient vs trimestre anterior?
+   Longitud mínima: ≥ 80 caràcters citats de les eines.
+
+CRITERI 3b — VALORACIÓ (valuation_assessment)
+   De get_fundamentals: forward P/E, PEG, P/S TTM.
+   Compara amb sector o un peer directe.
+   Conclusió OBLIGATÒRIA: "cotitza a descompte / paritat / prima respecte sector".
+   Longitud mínima: ≥ 80 caràcters amb xifres de get_fundamentals.
+
+ORDRE D'EINES OBLIGATORI PER A CADA CANDIDAT (diumenges):
+   1. get_active_themes()                  → identificar theme_id (Criteri 1)
+   2. get_ticker_analysis(ticker)          → RSI + notícies
+   3. get_fundamentals(ticker)             → P/E, marges, growth (Criteri 3b)
+   4. get_analyst_targets(ticker)          → objectiu de preu
+   5. get_recent_earnings_history(ticker)  → beat/miss (Criteri 3a)
+   6. get_recent_8k_filings(ticker)        → guidance (Criteri 3a, US only)
+   7. submit_thesis(... + 4 camps scorecard) → amb scorecard complet
+
+════════════════════════════════════════
 REGLES FERMES (no negociables)
 ════════════════════════════════════════
 
@@ -195,7 +236,9 @@ def run_daily_review(is_sunday: bool = False) -> dict:
             "Tasques d'avui:\n"
             "1. REVISIÓ DIÀRIA: revisa totes les tesis actives i en espera.\n"
             "2. ESCANEIG DE CANDIDATS: avalua l'univers complet i proposa ≤ 2 noves tesis.\n\n"
-            "Comença sempre per la revisió de les tesis existents, després escaneja candidats."
+            "Comença sempre per la revisió de les tesis existents, després escaneja candidats.\n\n"
+            "Per a l'escaneig de candidats, comença per get_active_themes() — theme_id és "
+            "obligatori per a cada nova tesi quan hi ha temes actius."
         )
     else:
         task_description += (

@@ -116,6 +116,75 @@ def _run_pm_agent(sunday_mode: bool = False) -> None:
         st.error(f"L'agent ha fallat (codi {proc.returncode}). Revisa els logs.")
 
 
+# ── Phase 4b scorecard helpers ────────────────────────────────────────────────
+
+def _build_theme_name_map() -> dict[int, str]:
+    """Load id→name for all active themes (one query per render, avoids N+1)."""
+    try:
+        from core.db import Theme as ThemeModel
+        with get_session() as s:
+            return {
+                t.id: t.name
+                for t in s.query(ThemeModel).filter(ThemeModel.status == "active").all()
+            }
+    except Exception:
+        return {}
+
+
+def _render_scorecard(thesis, theme_name_map: dict[int, str]) -> None:
+    """Render the 3-criteria evaluation scorecard for a thesis card.
+
+    Only rendered if at least one of the four Phase 4b fields is populated.
+    Legacy theses (all None) silently produce nothing.
+    """
+    has_any = any([
+        thesis.theme_id,
+        thesis.positioning_vs_theme,
+        thesis.execution_evidence,
+        thesis.valuation_assessment,
+    ])
+    if not has_any:
+        return
+
+    filled = sum([
+        bool(thesis.positioning_vs_theme),
+        bool(thesis.execution_evidence),
+        bool(thesis.valuation_assessment),
+    ])
+    badge = ("✅" if filled == 3 else "🟡") + f" Scorecard {filled}/3"
+
+    with st.expander(f"📊 {badge} — Marc d'avaluació"):
+        # Criterion 1 — Theme fit
+        if thesis.theme_id:
+            theme_name = theme_name_map.get(thesis.theme_id, f"Tema #{thesis.theme_id}")
+            st.info(f"**1. Tema:** {theme_name}")
+        else:
+            st.warning("**1. Tema:** No vinculat a cap tema actiu")
+
+        # Criterion 2 — Unique competitive positioning
+        if thesis.positioning_vs_theme:
+            st.markdown("**2. Posicionament competitiu únic**")
+            st.markdown(thesis.positioning_vs_theme)
+        else:
+            st.warning("**2. Posicionament:** No avaluat")
+
+        # Criterion 3 — Execution + valuation (two columns)
+        st.markdown("**3. Valoració i execució**")
+        col_exec, col_val = st.columns(2)
+        with col_exec:
+            st.caption("3a. Execució (8-K / earnings)")
+            if thesis.execution_evidence:
+                st.success(thesis.execution_evidence)
+            else:
+                st.warning("No avaluat")
+        with col_val:
+            st.caption("3b. Preu (P/E, PEG, P/S)")
+            if thesis.valuation_assessment:
+                st.success(thesis.valuation_assessment)
+            else:
+                st.warning("No avaluat")
+
+
 # ── Main render function ───────────────────────────────────────────────────────
 
 def render_thesis_tab() -> None:
@@ -126,8 +195,11 @@ def render_thesis_tab() -> None:
         "Cada acció proposada requereix la teva aprovació — el bot no opera mai de forma autònoma."
     )
 
+    # ── Build theme name map once (used by _render_scorecard in all sections) ──
+    theme_name_map = _build_theme_name_map()
+
     # ── Capital metric ────────────────────────────────────────────────────────
-    col_cap, col_pos, col_wait = st.columns(3)
+    col_cap, col_pos, col_wait, col_score = st.columns(4)
     with get_session() as s:
         active_count = (
             s.query(Thesis)
@@ -148,10 +220,24 @@ def render_thesis_tab() -> None:
             )
             .count()
         )
+        # Count active theses with all 4 scorecard fields populated
+        complete_scorecard_count = (
+            s.query(Thesis)
+            .filter(
+                Thesis.bot_id == 30,
+                Thesis.status == "active",
+                Thesis.theme_id.isnot(None),
+                Thesis.positioning_vs_theme.isnot(None),
+                Thesis.execution_evidence.isnot(None),
+                Thesis.valuation_assessment.isnot(None),
+            )
+            .count()
+        )
 
     col_cap.metric("Capital inicial", "€5,000")
     col_pos.metric("Tesis actives", active_count)
     col_wait.metric("Accions pendents", pending_count)
+    col_score.metric("Scorecards complets", f"{complete_scorecard_count}/{active_count}")
 
     st.divider()
 
@@ -226,6 +312,9 @@ def render_thesis_tab() -> None:
                 # Thesis narrative
                 st.markdown(f"**Tesi:** {thesis.thesis_text}")
 
+                # Phase 4b — 3-criteria scorecard
+                _render_scorecard(thesis, theme_name_map)
+
                 with st.expander("Veure cas bull/bear + invalidació"):
                     st.markdown(f"**🐂 Bull case:** {thesis.bull_case}")
                     st.markdown(f"**🐻 Bear case:** {thesis.bear_case}")
@@ -292,6 +381,9 @@ def render_thesis_tab() -> None:
                     f"Caduca en {expires_in} dies"
                 )
                 st.markdown(f"**Tesi:** {thesis.thesis_text}")
+
+                # Phase 4b — 3-criteria scorecard
+                _render_scorecard(thesis, theme_name_map)
 
                 with st.expander("Veure cas bull/bear + invalidació + catalitzadors"):
                     st.markdown(f"**🐂 Bull case:** {thesis.bull_case}")
@@ -390,6 +482,9 @@ def render_thesis_tab() -> None:
                             f"({cat.get('expected_date', '?')}): "
                             f"{cat.get('expected_outcome', '')}"
                         )
+
+                # Phase 4b — 3-criteria scorecard
+                _render_scorecard(thesis, theme_name_map)
 
                 if last_review:
                     st.divider()

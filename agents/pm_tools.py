@@ -507,6 +507,40 @@ def get_analyst_targets(ticker: str) -> str:
     })
 
 
+def get_active_themes_for_analyst() -> str:
+    """Return user-approved investment themes for the analyst to use when submitting theses.
+
+    The analyst calls this during Sunday scans to resolve theme_id before calling
+    submit_thesis — theme_id is required when active themes exist.
+
+    Implemented directly here (not imported from strategist_tools) to avoid a
+    circular import: strategist_tools imports from pm_tools at module level.
+    """
+    from core.db import Theme
+    with get_session() as s:
+        themes = s.query(Theme).filter(Theme.status == "active").order_by(Theme.potential.desc()).all()
+        if not themes:
+            return json.dumps({"message": "No active themes. User must approve theme proposals first."})
+        return json.dumps([
+            {
+                "id":                t.id,
+                "name":              t.name,
+                "potential":         t.potential,
+                "importance":        t.importance,
+                "candidate_tickers": t.candidate_tickers,
+                "narrative_text":    t.narrative_text[:400],  # truncated for context efficiency
+            }
+            for t in themes
+        ])
+
+
+def _get_active_theme_ids() -> list[int]:
+    """Return IDs of all active themes. Used inside submit_thesis validation."""
+    from core.db import Theme
+    with get_session() as s:
+        return [t.id for t in s.query(Theme).filter(Theme.status == "active").all()]
+
+
 def get_active_theses() -> str:
     """Return all theses that are currently active or waiting for a signal.
 
@@ -531,9 +565,14 @@ def get_active_theses() -> str:
                 "opened_at":     str(t.opened_at.date()),
                 "last_reviewed_at": str(t.last_reviewed_at.date()) if t.last_reviewed_at else None,
                 "consecutive_weakening_count": t.consecutive_weakening_count,
-                "thesis_text":   t.thesis_text,
-                "invalidates_if": t.invalidates_if,
-                "catalysts":     t.catalysts,
+                "thesis_text":           t.thesis_text,
+                "invalidates_if":        t.invalidates_if,
+                "catalysts":             t.catalysts,
+                # Phase 4 scorecard fields (None for legacy theses)
+                "theme_id":              t.theme_id,
+                "positioning_vs_theme":  t.positioning_vs_theme,
+                "execution_evidence":    t.execution_evidence,
+                "valuation_assessment":  t.valuation_assessment,
             })
 
     if not result:
@@ -552,6 +591,11 @@ def submit_thesis(
     catalysts: list[dict],
     target_price_eur: float | None = None,
     stop_price_eur: float | None = None,
+    # Phase 4 scorecard — required when active themes exist, optional for legacy paths
+    theme_id: int | None = None,
+    positioning_vs_theme: str | None = None,
+    execution_evidence: str | None = None,
+    valuation_assessment: str | None = None,
 ) -> str:
     """Validate and persist a new thesis for a ticker.
 
@@ -624,6 +668,57 @@ def submit_thesis(
             )
         })
 
+    # ── Phase 4: enforce theme linkage + 3-criteria scorecard ───────────────
+    # theme_id is required when active themes exist — the analyst must link each
+    # new thesis to a user-approved Theme so analysis is framed within the right
+    # investment narrative, not case-built from scratch.
+    active_theme_ids = _get_active_theme_ids()
+    if active_theme_ids:
+        if theme_id is None:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    f"theme_id is required when active themes exist {active_theme_ids}. "
+                    "Call get_active_themes() to see the available themes and their IDs, "
+                    "then re-submit with the most relevant theme_id."
+                ),
+            })
+        if theme_id not in active_theme_ids:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    f"theme_id={theme_id} is not an active theme. "
+                    f"Valid active theme IDs: {active_theme_ids}. "
+                    "Call get_active_themes() to get the current list."
+                ),
+            })
+
+    if theme_id is not None:
+        # When a theme is linked, the 3-criteria scorecard fields are mandatory.
+        MIN_SCORECARD_CHARS = 80
+        missing = []
+        for field_value, field_label in [
+            (positioning_vs_theme,
+             "positioning_vs_theme (≥80 chars — specific competitive moat vs peers: "
+             "technology, switching costs, margin trajectory, market share — NOT 'operates in the space')"),
+            (execution_evidence,
+             "execution_evidence (≥80 chars — cite actual 8-K/earnings data: "
+             "beat/miss amount, guidance raised or cut, margin trend vs prior quarter)"),
+            (valuation_assessment,
+             "valuation_assessment (≥80 chars — cite real P/E, PEG, P/S from get_fundamentals; "
+             "conclude 'discount / parity / premium vs sector' with the actual numbers)"),
+        ]:
+            if not field_value or len(field_value.strip()) < MIN_SCORECARD_CHARS:
+                missing.append(field_label)
+        if missing:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    "The 3-criteria scorecard is incomplete. Fix and resubmit:\n  - "
+                    + "\n  - ".join(missing)
+                ),
+            })
+
     # ── Duplicate check ──────────────────────────────────────────────────────
     with get_session() as s:
         existing = (
@@ -669,6 +764,11 @@ def submit_thesis(
             target_price_eur=target_price_eur,
             stop_price_eur=stop_price_eur,
             max_position_pct=size,
+            # Phase 4 scorecard
+            theme_id=theme_id,
+            positioning_vs_theme=positioning_vs_theme.strip() if positioning_vs_theme else None,
+            execution_evidence=execution_evidence.strip() if execution_evidence else None,
+            valuation_assessment=valuation_assessment.strip() if valuation_assessment else None,
         )
         s.add(thesis)
         s.flush()
@@ -1052,6 +1152,16 @@ TOOL_DEFINITIONS: list[dict] = [
         },
     },
     {
+        "name": "get_active_themes",
+        "description": (
+            "Returns user-approved investment Themes (status=active). MUST call during "
+            "Sunday candidate scans to resolve theme_id before submit_thesis — theme_id "
+            "is required when active themes exist. Returns id, name, potential, "
+            "importance, candidate_tickers, and a short excerpt of narrative_text."
+        ),
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
         "name": "submit_thesis",
         "description": (
             "Validate and persist a new investment thesis for a ticker. "
@@ -1091,6 +1201,40 @@ TOOL_DEFINITIONS: list[dict] = [
                 },
                 "target_price_eur": {"type": "number", "description": "Optional price target in EUR."},
                 "stop_price_eur":   {"type": "number", "description": "Optional stop price in EUR."},
+                "theme_id": {
+                    "type": "integer",
+                    "description": (
+                        "Criterion 1 — Theme Fit: ID of the active theme this stock plays into. "
+                        "Required when active themes exist. Call get_active_themes() first to see IDs."
+                    ),
+                },
+                "positioning_vs_theme": {
+                    "type": "string",
+                    "description": (
+                        "Criterion 2 — Unique competitive moat vs peers within the theme: technology "
+                        "lead, switching costs, margin trajectory, market share evidence from 8-K. "
+                        "≥80 chars. NOT 'operates in the space' — cite what makes THIS company better "
+                        "than its theme peers (e.g. NRR >120%, gross margin 10pp above peers, "
+                        "proprietary patents, 4+ quarters of guidance beats)."
+                    ),
+                },
+                "execution_evidence": {
+                    "type": "string",
+                    "description": (
+                        "Criterion 3a — Execution quality from get_recent_8k_filings + "
+                        "get_recent_earnings_history: beat/miss amount, guidance raised/cut, "
+                        "margin trend vs prior quarter. ≥80 chars."
+                    ),
+                },
+                "valuation_assessment": {
+                    "type": "string",
+                    "description": (
+                        "Criterion 3b — Valuation from get_fundamentals: cite forward P/E, PEG "
+                        "(< 1 = cheap for growth, > 2 = expensive), P/S TTM. Compare vs a peer or "
+                        "sector average. Conclude with: 'cotitza a descompte / paritat / prima "
+                        "respecte sector'. ≥80 chars."
+                    ),
+                },
             },
             "required": [
                 "ticker", "conviction", "horizon_months",
@@ -1173,6 +1317,8 @@ def _dispatch_inner(tool_name: str, tool_input: dict) -> str:
             tool_input.get("days", 90),
             tool_input.get("limit", 5),
         )
+    if tool_name == "get_active_themes":
+        return get_active_themes_for_analyst()
     if tool_name == "submit_thesis":
         return submit_thesis(
             ticker=tool_input["ticker"],
@@ -1185,6 +1331,10 @@ def _dispatch_inner(tool_name: str, tool_input: dict) -> str:
             catalysts=tool_input.get("catalysts", []),
             target_price_eur=tool_input.get("target_price_eur"),
             stop_price_eur=tool_input.get("stop_price_eur"),
+            theme_id=tool_input.get("theme_id"),
+            positioning_vs_theme=tool_input.get("positioning_vs_theme"),
+            execution_evidence=tool_input.get("execution_evidence"),
+            valuation_assessment=tool_input.get("valuation_assessment"),
         )
     if tool_name == "submit_review":
         return submit_review(
