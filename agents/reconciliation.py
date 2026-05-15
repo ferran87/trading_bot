@@ -553,6 +553,7 @@ def cancel_orphan_orders(
 def reconcile_t212_positions(
     bot_ids: list[int],
     demo: bool = True,
+    owner: str | None = None,
 ) -> list[dict]:
     """Compare SQLite positions against the live T212 account portfolio.
 
@@ -564,6 +565,9 @@ def reconcile_t212_positions(
     ----------
     bot_ids : list of bot IDs whose SQLite positions are aggregated.
     demo    : True = paper (demo.trading212.com), False = live.
+    owner   : Optional T212 account owner name (e.g. 'Antonio').  When set,
+              uses ``T212_API_KEY_{SUFFIX}_{OWNER}`` credentials.  Defaults
+              to the unsuffixed env vars (single-account / Ferran).
 
     Returns
     -------
@@ -587,7 +591,7 @@ def reconcile_t212_positions(
     # ── T212 portfolio fetch ──────────────────────────────────────────────────
     try:
         from core.broker import Trading212Broker
-        broker = Trading212Broker(demo=demo)
+        broker = Trading212Broker(demo=demo, owner=owner)
         t212_items: list[dict] = broker._get("/equity/portfolio")
     except Exception as exc:
         log.warning("reconcile_t212: portfolio fetch failed: %s", exc)

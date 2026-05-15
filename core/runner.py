@@ -230,7 +230,18 @@ def _broker_for_bot(bot_id: int, trading_mode: str = "paper") -> "BrokerInterfac
         from core.broker import Trading212Broker
         # Demo mode for paper trading; live mode when trading_mode=="live"
         demo = (trading_mode != "live")
-        return Trading212Broker(demo=demo)
+        # Resolve the bot's owner so the broker picks the right T212 credentials.
+        # Owner=None falls back to the unsuffixed env vars (single-account default,
+        # currently Ferran's keys).
+        owner: str | None = None
+        try:
+            with get_session() as _s:
+                _b = _s.query(Bot).filter(Bot.id == bot_id).first()
+                if _b and _b.owner:
+                    owner = _b.owner
+        except Exception as exc:
+            log.warning("_broker_for_bot: could not resolve owner for bot=%d: %s", bot_id, exc)
+        return Trading212Broker(demo=demo, owner=owner)
     raise ValueError(f"Unknown BROKER_BACKEND={backend!r}")
 
 
@@ -337,7 +348,6 @@ def _sync_t212_initial_capital(today: date) -> None:
 
             for mode in ("paper", "live"):
                 demo = (mode == "paper")
-                broker = Trading212Broker(demo=demo)
 
                 enabled_bots = [
                     b for b in all_bots
@@ -346,48 +356,61 @@ def _sync_t212_initial_capital(today: date) -> None:
                 if not enabled_bots:
                     continue
 
+                # Group by owner so each owner's account is queried only with
+                # its own credentials, and so deposit splits don't bleed across
+                # accounts (Ferran's €50k must not be split across Antonio's bots).
+                bots_by_owner: dict[str | None, list[Bot]] = {}
                 for b in enabled_bots:
-                    # Live bots with a since-date get their own filtered deposit total;
-                    # paper bots and live bots without a since-date share the full total.
-                    since = getattr(b, "live_capital_since", None)
+                    owner_key = (b.owner or "").strip() or None
+                    bots_by_owner.setdefault(owner_key, []).append(b)
 
-                    try:
-                        deposited_eur = broker._fetch_total_deposited(since_date=since)
-                    except Exception as exc:
-                        log.warning(
-                            "_sync_t212_initial_capital: could not fetch T212 %s "
-                            "transaction history for bot=%d: %s",
-                            mode, b.id, exc,
-                        )
-                        continue
+                for owner_key, owner_bots in bots_by_owner.items():
+                    broker = Trading212Broker(demo=demo, owner=owner_key)
 
-                    if deposited_eur <= 0:
-                        log.warning(
-                            "_sync_t212_initial_capital: bot=%d T212 %s deposited=%.2f "
-                            "(since=%s) — skipping",
-                            b.id, mode, deposited_eur, since,
-                        )
-                        continue
+                    for b in owner_bots:
+                        # Live bots with a since-date get their own filtered deposit total;
+                        # paper bots and live bots without a since-date share the full total
+                        # WITHIN their owner's account.
+                        since = getattr(b, "live_capital_since", None)
 
-                    # For bots without a since-date, split total equally across peers
-                    # (paper bots share the paper account).  For bots with a since-date
-                    # (live bots with their own deposit slice), use the full filtered amount.
-                    if since is None:
-                        n_peers = len(enabled_bots)
-                        per_bot_eur = round(deposited_eur / n_peers, 2)
-                    else:
-                        per_bot_eur = round(deposited_eur, 2)
+                        try:
+                            deposited_eur = broker._fetch_total_deposited(since_date=since)
+                        except Exception as exc:
+                            log.warning(
+                                "_sync_t212_initial_capital: could not fetch T212 %s "
+                                "transaction history for bot=%d (owner=%s): %s",
+                                mode, b.id, owner_key, exc,
+                            )
+                            continue
 
-                    if abs(b.initial_capital_eur - per_bot_eur) > 0.01:
-                        log.info(
-                            "_sync_t212_initial_capital: bot=%d %s mode=%s "
-                            "initial_capital_eur %.2f -> %.2f "
-                            "(deposited=%.2f since=%s)",
-                            b.id, b.name, mode,
-                            b.initial_capital_eur, per_bot_eur,
-                            deposited_eur, since,
-                        )
-                        b.initial_capital_eur = per_bot_eur
+                        if deposited_eur <= 0:
+                            log.warning(
+                                "_sync_t212_initial_capital: bot=%d T212 %s "
+                                "deposited=%.2f (owner=%s since=%s) — skipping",
+                                b.id, mode, deposited_eur, owner_key, since,
+                            )
+                            continue
+
+                        # For bots without a since-date, split the owner's total
+                        # equally across the owner's enabled bots in this mode.
+                        # For bots with a since-date (live + manual cohort), use
+                        # the full filtered amount.
+                        if since is None:
+                            n_peers = len(owner_bots)
+                            per_bot_eur = round(deposited_eur / n_peers, 2)
+                        else:
+                            per_bot_eur = round(deposited_eur, 2)
+
+                        if abs(b.initial_capital_eur - per_bot_eur) > 0.01:
+                            log.info(
+                                "_sync_t212_initial_capital: bot=%d %s mode=%s "
+                                "owner=%s initial_capital_eur %.2f -> %.2f "
+                                "(deposited=%.2f since=%s)",
+                                b.id, b.name, mode, owner_key,
+                                b.initial_capital_eur, per_bot_eur,
+                                deposited_eur, since,
+                            )
+                            b.initial_capital_eur = per_bot_eur
 
                 session.commit()
 
@@ -429,16 +452,22 @@ def _resolve_t212_pending_orders() -> None:
 
             log.info("_resolve_t212_pending: checking %d pending order(s)", len(pending))
 
-            # Group by trading_mode so we use the right T212 account (paper vs live)
+            # Group by (trading_mode, owner) so we use the right T212 account.
+            # Each bot's pending order lives in its owner's T212 history; using
+            # the wrong account returns "order not found" and the trade gets
+            # stuck pending forever.
             from core.db import Bot
-            bot_mode: dict[int, str] = {
-                b.id: getattr(b, "trading_mode", "paper")
+            bot_info: dict[int, tuple[str, str | None]] = {
+                b.id: (
+                    getattr(b, "trading_mode", "paper"),
+                    (b.owner or "").strip() or None,
+                )
                 for b in session.query(Bot).all()
             }
 
             from core.broker import Trading212Broker
 
-            # Fetch complete order history once per demo/live account and index
+            # Fetch complete order history once per (demo, owner) account and index
             # by order ID.  The individual /orders/{id} endpoint returns 404 once
             # an order is old, so the history endpoint is the only reliable source.
             def _fetch_history(broker: Trading212Broker) -> dict[str, dict]:
@@ -458,17 +487,20 @@ def _resolve_t212_pending_orders() -> None:
                     url = next_path if next_path else None
                 return history
 
-            brokers: dict[bool, Trading212Broker] = {}
-            histories: dict[bool, dict[str, dict]] = {}
+            BrokerKey = tuple[bool, str | None]   # (demo, owner)
+            brokers: dict[BrokerKey, Trading212Broker] = {}
+            histories: dict[BrokerKey, dict[str, dict]] = {}
 
             for trade in pending:
-                demo = (bot_mode.get(trade.bot_id, "paper") == "paper")
-                if demo not in brokers:
-                    brokers[demo]   = Trading212Broker(demo=demo)
-                    histories[demo] = _fetch_history(brokers[demo])
+                mode, owner_key = bot_info.get(trade.bot_id, ("paper", None))
+                demo = (mode == "paper")
+                key: BrokerKey = (demo, owner_key)
+                if key not in brokers:
+                    brokers[key]   = Trading212Broker(demo=demo, owner=owner_key)
+                    histories[key] = _fetch_history(brokers[key])
 
                 order_id  = str(trade.broker_order_id)
-                item      = histories[demo].get(order_id)
+                item      = histories[key].get(order_id)
                 if item is None:
                     log.debug(
                         "_resolve_t212_pending: order %s not in history — leaving pending",
@@ -566,27 +598,42 @@ def _resolve_t212_pending_orders() -> None:
 
 
 def _log_t212_reconciliation(bot_ids: list[int], demo: bool = True) -> None:
-    """Compare SQLite positions vs live T212 account and log any mismatches.
+    """Compare SQLite positions vs live T212 account(s) and log any mismatches.
 
     Log-only, non-blocking.  Mismatches appear as WARNING in the run log
     and in the dashboard '🔍 Reconciliació' expander.
 
-    Called once per daily run after pending orders are resolved.
+    Called once per daily run after pending orders are resolved.  Each owner
+    has its own T212 account so we group bot_ids by owner and reconcile
+    each owner's bots against that owner's T212 account separately.
     """
     try:
         from agents.reconciliation import reconcile_t212_positions
-        discrepancies = reconcile_t212_positions(bot_ids, demo=demo)
-        if discrepancies:
-            for d in discrepancies:
-                log.warning(
-                    "T212 reconciliation: %-8s  SQLite=%.2f  T212=%.2f  diff=%+.2f  [%s]",
-                    d["yf_ticker"], d["sqlite_qty"], d["t212_qty"], d["diff"], d["issue"],
+        # Group bot_ids by owner so each T212 account only sees its own bots.
+        owner_to_bots: dict[str | None, list[int]] = {}
+        with get_session() as _s:
+            for b in _s.query(Bot).filter(Bot.id.in_(bot_ids)).all():
+                owner = (b.owner or "").strip() or None
+                owner_to_bots.setdefault(owner, []).append(b.id)
+
+        any_mismatch = False
+        for owner, ids in owner_to_bots.items():
+            discrepancies = reconcile_t212_positions(ids, demo=demo, owner=owner)
+            if discrepancies:
+                any_mismatch = True
+                for d in discrepancies:
+                    log.warning(
+                        "T212 reconciliation [%s]: %-8s  SQLite=%.2f  T212=%.2f  diff=%+.2f  [%s]",
+                        owner or "default", d["yf_ticker"],
+                        d["sqlite_qty"], d["t212_qty"], d["diff"], d["issue"],
+                    )
+            else:
+                log.info(
+                    "T212 reconciliation [%s]: OK — all %d position(s) match between SQLite and T212",
+                    owner or "default", len(ids),
                 )
-        else:
-            log.info(
-                "T212 reconciliation: OK — all %d position(s) match between SQLite and T212",
-                len(bot_ids),
-            )
+        if any_mismatch:
+            log.warning("T212 reconciliation: at least one account has mismatches — see above")
     except Exception as exc:
         log.debug("_log_t212_reconciliation: failed (non-fatal): %s", exc)
 

@@ -565,10 +565,15 @@ class Trading212Broker:
     _ORDER_POLL_INTERVAL_SEC = 2.0
     _ORDER_POLL_TIMEOUT_SEC = 120.0
 
-    def __init__(self, demo: bool | None = None) -> None:
+    def __init__(self, demo: bool | None = None, owner: str | None = None) -> None:
         if demo is None:
             demo = os.environ.get("T212_DEMO", "1") == "1"
         self._demo = demo
+        # ``owner`` selects which set of T212 credentials to use.  When set,
+        # ``_credentials()`` looks up ``T212_API_KEY_{PAPER|LIVE}_{OWNER.upper()}``
+        # first and falls back to the unsuffixed key for backward compat with
+        # the original single-account setup (Ferran's keys, pre-Antonio).
+        self._owner = (owner or "").strip() or None
         self._instruments_cache: dict[str, dict] | None = None  # yf_ticker → T212 entry
 
     @property
@@ -580,24 +585,44 @@ class Trading212Broker:
         )
 
     def _credentials(self) -> tuple[str, str]:
-        """Return (api_key, api_secret) for the current environment."""
+        """Return (api_key, api_secret) for the current environment and owner.
+
+        Lookup order (first non-empty wins):
+          1. ``T212_API_KEY_{SUFFIX}_{OWNER}``  — per-owner credentials
+          2. ``T212_API_KEY_{SUFFIX}``          — single-account default (Ferran)
+          3. ``T212_API_KEY``                   — legacy single-env-var fallback
+        """
         suffix = "PAPER" if self._demo else "LIVE"
-        key = (
-            os.environ.get(f"T212_API_KEY_{suffix}", "").strip()
-            or os.environ.get("T212_API_KEY", "").strip()
-        )
-        secret = (
-            os.environ.get(f"T212_API_SECRET_{suffix}", "").strip()
-            or os.environ.get("T212_API_SECRET", "").strip()
-        )
+        owner_suffix = (self._owner.upper() if self._owner else "")
+
+        def _resolve(prefix: str) -> str:
+            candidates: list[str] = []
+            if owner_suffix:
+                candidates.append(f"{prefix}_{suffix}_{owner_suffix}")
+            candidates.append(f"{prefix}_{suffix}")
+            candidates.append(prefix)
+            for name in candidates:
+                v = os.environ.get(name, "").strip()
+                if v:
+                    return v
+            return ""
+
+        key = _resolve("T212_API_KEY")
+        secret = _resolve("T212_API_SECRET")
+
+        owner_hint = f" for owner={self._owner!r}" if self._owner else ""
         if not key:
             raise RuntimeError(
-                f"T212_API_KEY_{suffix} not set in .env -- cannot connect to Trading 212. "
+                f"T212_API_KEY_{suffix}"
+                + (f"_{owner_suffix}" if owner_suffix else "")
+                + f" not set in .env{owner_hint} -- cannot connect to Trading 212. "
                 "Generate a key from T212 -> Settings -> API (Beta) and save both the key AND secret."
             )
         if not secret:
             raise RuntimeError(
-                f"T212_API_SECRET_{suffix} not set in .env -- the secret is shown only once "
+                f"T212_API_SECRET_{suffix}"
+                + (f"_{owner_suffix}" if owner_suffix else "")
+                + f" not set in .env{owner_hint} -- the secret is shown only once "
                 "at key creation time. Delete the old key, generate a new one, and save both values."
             )
         return key, secret

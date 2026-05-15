@@ -191,8 +191,10 @@ def _kpi_with_ibkr(
         # between bots — splitting equally gives identical cards regardless of
         # what each bot traded.  Only the return_pct baseline is overridden to
         # use actual deposited capital instead of the settings.yaml default.
+        # Each owner has their own T212 account so we fetch deposits per-owner.
         demo = (mode != "live")
-        t212_deposited = _t212_total_deposited(demo)
+        owner = bot.get("owner") if isinstance(bot, dict) else getattr(bot, "owner", None)
+        t212_deposited = _t212_total_deposited(demo, owner=owner)
         n = max(n_active_bots, 1)
         deposit_share = (t212_deposited / n if t212_deposited > 0
                          else float(bot["initial_eur"]))
@@ -825,6 +827,13 @@ def _render_reconciliation_t212(
 ) -> None:
     """Reconciliation panel for T212 backend: compares SQLite vs live T212 portfolio."""
     demo = (mode == "paper")
+    # bots_subset is already filtered to a single owner upstream, so any bot's
+    # owner is the right T212 account to reconcile against.
+    owner: str | None = None
+    if not bots_subset.empty:
+        owners = [o for o in bots_subset["owner"].unique() if isinstance(o, str) and o]
+        if owners:
+            owner = owners[0]
 
     with st.expander("🔍 Reconciliació SQLite ↔ T212"):
         col_refresh, col_info = st.columns([1, 4])
@@ -833,9 +842,12 @@ def _render_reconciliation_t212(
                 _reconcile_t212_cached.clear()
                 st.rerun()
         with col_info:
-            st.caption("Compara les posicions al SQLite (virtual book del bot) contra el compte T212 real.")
+            st.caption(
+                "Compara les posicions al SQLite (virtual book del bot) contra el compte T212 real"
+                + (f" de **{owner}**." if owner else ".")
+            )
 
-        discrepancies = _reconcile_t212_cached(bot_ids, demo)
+        discrepancies = _reconcile_t212_cached(bot_ids, demo, owner=owner)
 
         if not discrepancies:
             st.success("✅ Tot correcte — SQLite i T212 coincideixen en totes les posicions.")
@@ -1009,9 +1021,16 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     ibkr_executions = _ibkr_executions(ibkr_port) if ibkr_port else pd.DataFrame()
 
     t212_demo          = (mode != "live")
-    t212_portfolio     = _t212_portfolio(t212_demo)    if use_t212 else pd.DataFrame()
-    t212_open_orders   = _t212_open_orders(t212_demo)  if use_t212 else pd.DataFrame()
-    t212_order_history = _t212_order_history(t212_demo) if use_t212 else pd.DataFrame()
+    # bots_subset is already filtered to one owner upstream so we can grab any
+    # row's owner — that's whose T212 account this tab represents.
+    t212_owner: str | None = None
+    if use_t212 and not bots_subset.empty:
+        _owners = [o for o in bots_subset["owner"].unique() if isinstance(o, str) and o]
+        if _owners:
+            t212_owner = _owners[0]
+    t212_portfolio     = _t212_portfolio(t212_demo, owner=t212_owner)    if use_t212 else pd.DataFrame()
+    t212_open_orders   = _t212_open_orders(t212_demo, owner=t212_owner)  if use_t212 else pd.DataFrame()
+    t212_order_history = _t212_order_history(t212_demo, owner=t212_owner) if use_t212 else pd.DataFrame()
 
     # ── Strategy info expanders ───────────────────────────────────────────────
     seen: set[str] = set()
@@ -1089,8 +1108,9 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
 
     # ── T212 live account strip ───────────────────────────────────────────────
     if use_t212:
-        t212_acc       = _t212_account(t212_demo)
-        t212_deposited = _t212_total_deposited(t212_demo)
+        t212_acc       = _t212_account(t212_demo, owner=t212_owner)
+        t212_deposited = _t212_total_deposited(t212_demo, owner=t212_owner)
+        owner_label = f" ({t212_owner})" if t212_owner else ""
         if t212_acc:
             total    = t212_acc["total_eur"]
             pnl_eur  = total - t212_deposited if t212_deposited > 0 else 0.0
@@ -1099,12 +1119,24 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
             reserved = max(total - t212_acc["cash_eur"] - t212_acc["invested_eur"], 0.0)
 
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("💰 Total compte T212",  f"€{total:,.2f}")
+            c1.metric(f"💰 Total compte T212{owner_label}",  f"€{total:,.2f}")
             c2.metric("📥 Capital dipositat",  f"€{t212_deposited:,.2f}" if t212_deposited else "—")
             c3.metric("📈 P&L vs dipòsit",     f"€{pnl_eur:+,.2f}", pnl_str,
                       delta_color="normal" if pnl_eur >= 0 else "inverse")
             c4.metric("🏦 Efectiu disponible", f"€{t212_acc['cash_eur']:,.2f}")
             c5.metric("⏳ Reservat per ordres", f"€{reserved:,.2f}")
+        else:
+            # No account data → either missing credentials or API failure.
+            suffix = "PAPER" if t212_demo else "LIVE"
+            env_var = (
+                f"T212_API_KEY_{suffix}_{t212_owner.upper()}" if t212_owner
+                else f"T212_API_KEY_{suffix}"
+            )
+            st.warning(
+                f"⚠️ No s'ha pogut connectar al compte T212{owner_label}.  "
+                f"Comprova que **{env_var}** i el `_SECRET` corresponent estiguin "
+                "definits a `.env` (o `secrets.toml` a Streamlit Cloud)."
+            )
 
     st.markdown("#### 📂 Posicions obertes")
     if use_ibkr and not ibkr_portfolio.empty:

@@ -114,11 +114,17 @@ def _reconcile_cached(bot_ids: tuple[int, ...], ibkr_port: int) -> list[dict]:
 
 
 @st.cache_data(ttl=60)
-def _reconcile_t212_cached(bot_ids: tuple[int, ...], demo: bool) -> list[dict]:
-    """Cached wrapper around the T212 reconciliation (60 s TTL)."""
+def _reconcile_t212_cached(
+    bot_ids: tuple[int, ...], demo: bool, owner: str | None = None,
+) -> list[dict]:
+    """Cached wrapper around the T212 reconciliation (60 s TTL).
+
+    The ``owner`` parameter selects which T212 account to reconcile against
+    (defaults to the unsuffixed env vars = single-account / Ferran).
+    """
     try:
         from agents.reconciliation import reconcile_t212_positions
-        return reconcile_t212_positions(list(bot_ids), demo=demo)
+        return reconcile_t212_positions(list(bot_ids), demo=demo, owner=owner)
     except Exception as exc:
         return [{"yf_ticker": "ERROR", "t212_ticker": "", "severity": "ERROR",
                  "diff": 0.0, "sqlite_qty": 0.0, "t212_qty": 0.0,
@@ -565,13 +571,33 @@ def _ibkr_executions(port: int) -> pd.DataFrame:
 
 # ── T212 live account & portfolio ─────────────────────────────────────────────
 
-def _t212_headers(demo: bool) -> dict | None:
-    """Build the Basic-auth header for T212. Returns None if credentials missing."""
+def _t212_headers(demo: bool, owner: str | None = None) -> dict | None:
+    """Build the Basic-auth header for T212. Returns None if credentials missing.
+
+    Lookup order matches ``core.broker.Trading212Broker._credentials``:
+      1. ``T212_API_KEY_{SUFFIX}_{OWNER}``  — per-owner
+      2. ``T212_API_KEY_{SUFFIX}``          — single-account default
+      3. ``T212_API_KEY``                   — legacy fallback
+    """
     import base64
     import os
     suffix = "PAPER" if demo else "LIVE"
-    key    = os.environ.get(f"T212_API_KEY_{suffix}", "").strip()
-    secret = os.environ.get(f"T212_API_SECRET_{suffix}", "").strip()
+    owner_suffix = (owner or "").strip().upper() or None
+
+    def _resolve(prefix: str) -> str:
+        candidates: list[str] = []
+        if owner_suffix:
+            candidates.append(f"{prefix}_{suffix}_{owner_suffix}")
+        candidates.append(f"{prefix}_{suffix}")
+        candidates.append(prefix)
+        for name in candidates:
+            v = os.environ.get(name, "").strip()
+            if v:
+                return v
+        return ""
+
+    key    = _resolve("T212_API_KEY")
+    secret = _resolve("T212_API_SECRET")
     if not key or not secret:
         return None
     token = base64.b64encode(f"{key}:{secret}".encode()).decode()
@@ -579,7 +605,7 @@ def _t212_headers(demo: bool) -> dict | None:
 
 
 @st.cache_data(ttl=300)
-def _t212_total_deposited(demo: bool) -> float:
+def _t212_total_deposited(demo: bool, owner: str | None = None) -> float:
     """Return the net EUR deposited into the T212 account (deposits − withdrawals).
 
     Paginates through the full transaction history.  TTL=300s (5 min) because
@@ -587,7 +613,7 @@ def _t212_total_deposited(demo: bool) -> float:
     Returns 0.0 if credentials are missing or the API is unreachable.
     """
     import requests
-    headers = _t212_headers(demo)
+    headers = _t212_headers(demo, owner)
     if not headers:
         return 0.0
     base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
@@ -608,19 +634,19 @@ def _t212_total_deposited(demo: bool) -> float:
             next_path = data.get("nextPagePath")
             url = f"{base}{next_path}" if next_path else None
     except Exception as exc:
-        log.warning("_t212_total_deposited(demo=%s): %s", demo, exc)
+        log.warning("_t212_total_deposited(demo=%s, owner=%s): %s", demo, owner, exc)
     return deposited
 
 
 @st.cache_data(ttl=60)
-def _t212_account(demo: bool) -> dict[str, float] | None:
+def _t212_account(demo: bool, owner: str | None = None) -> dict[str, float] | None:
     """Fetch cash and total equity from T212 /equity/account/summary.
 
     Returns dict with keys: cash_eur, invested_eur, total_eur.
     Returns None if credentials are missing or the API is unreachable.
     """
     import requests
-    headers = _t212_headers(demo)
+    headers = _t212_headers(demo, owner)
     if not headers:
         return None
     base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
@@ -651,12 +677,12 @@ def _t212_account(demo: bool) -> dict[str, float] | None:
             "unrealized_pnl_eur": unrealized_pnl,
         }
     except Exception as exc:
-        log.warning("_t212_account(demo=%s): %s", demo, exc)
+        log.warning("_t212_account(demo=%s, owner=%s): %s", demo, owner, exc)
         return None
 
 
 @st.cache_data(ttl=30)
-def _t212_portfolio(demo: bool) -> pd.DataFrame:
+def _t212_portfolio(demo: bool, owner: str | None = None) -> pd.DataFrame:
     """Fetch open positions from T212 /equity/portfolio.
 
     Returns a DataFrame with columns:
@@ -666,7 +692,7 @@ def _t212_portfolio(demo: bool) -> pd.DataFrame:
     an empty portfolio — this is expected, not an auth error) or unreachable.
     """
     import requests
-    headers = _t212_headers(demo)
+    headers = _t212_headers(demo, owner)
     if not headers:
         return pd.DataFrame()
     base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
@@ -693,12 +719,12 @@ def _t212_portfolio(demo: bool) -> pd.DataFrame:
             })
         return pd.DataFrame(rows)
     except Exception as exc:
-        log.warning("_t212_portfolio(demo=%s): %s", demo, exc)
+        log.warning("_t212_portfolio(demo=%s, owner=%s): %s", demo, owner, exc)
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=15)
-def _t212_open_orders(demo: bool) -> pd.DataFrame:
+def _t212_open_orders(demo: bool, owner: str | None = None) -> pd.DataFrame:
     """Fetch open (NEW / PENDING_EXECUTION) orders from T212.
 
     Returns DataFrame with columns:
@@ -706,7 +732,7 @@ def _t212_open_orders(demo: bool) -> pd.DataFrame:
     Returns empty DataFrame on error or no open orders.
     """
     import requests
-    headers = _t212_headers(demo)
+    headers = _t212_headers(demo, owner)
     if not headers:
         return pd.DataFrame()
     base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
@@ -726,12 +752,12 @@ def _t212_open_orders(demo: bool) -> pd.DataFrame:
             })
         return pd.DataFrame(rows) if rows else pd.DataFrame()
     except Exception as exc:
-        log.warning("_t212_open_orders(demo=%s): %s", demo, exc)
+        log.warning("_t212_open_orders(demo=%s, owner=%s): %s", demo, owner, exc)
         return pd.DataFrame()
 
 
 @st.cache_data(ttl=30)
-def _t212_order_history(demo: bool, limit: int = 50) -> pd.DataFrame:
+def _t212_order_history(demo: bool, limit: int = 50, owner: str | None = None) -> pd.DataFrame:
     """Fetch filled order history from T212 /equity/history/orders.
 
     This is the source of truth for executed prices and fees.  T212 returns
@@ -744,7 +770,7 @@ def _t212_order_history(demo: bool, limit: int = 50) -> pd.DataFrame:
       comissió_eur, estat, order_id
     """
     import requests
-    headers = _t212_headers(demo)
+    headers = _t212_headers(demo, owner)
     if not headers:
         return pd.DataFrame()
     base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
@@ -788,5 +814,5 @@ def _t212_order_history(demo: bool, limit: int = 50) -> pd.DataFrame:
             })
         return pd.DataFrame(rows) if rows else pd.DataFrame()
     except Exception as exc:
-        log.warning("_t212_order_history(demo=%s): %s", demo, exc)
+        log.warning("_t212_order_history(demo=%s, owner=%s): %s", demo, owner, exc)
         return pd.DataFrame()
