@@ -559,6 +559,32 @@ def _resolve_t212_pending_orders() -> None:
         log.warning("_resolve_t212_pending_orders failed (non-fatal): %s", exc)
 
 
+def _log_t212_reconciliation(bot_ids: list[int], demo: bool = True) -> None:
+    """Compare SQLite positions vs live T212 account and log any mismatches.
+
+    Log-only, non-blocking.  Mismatches appear as WARNING in the run log
+    and in the dashboard '🔍 Reconciliació' expander.
+
+    Called once per daily run after pending orders are resolved.
+    """
+    try:
+        from agents.reconciliation import reconcile_t212_positions
+        discrepancies = reconcile_t212_positions(bot_ids, demo=demo)
+        if discrepancies:
+            for d in discrepancies:
+                log.warning(
+                    "T212 reconciliation: %-8s  SQLite=%.2f  T212=%.2f  diff=%+.2f  [%s]",
+                    d["yf_ticker"], d["sqlite_qty"], d["t212_qty"], d["diff"], d["issue"],
+                )
+        else:
+            log.info(
+                "T212 reconciliation: OK — all %d position(s) match between SQLite and T212",
+                len(bot_ids),
+            )
+    except Exception as exc:
+        log.debug("_log_t212_reconciliation: failed (non-fatal): %s", exc)
+
+
 def _recompute_position(session, bot_id: int, ticker: str) -> None:
     """Recompute and upsert the Position row for (bot_id, ticker) from filled trades.
 
@@ -641,6 +667,18 @@ def run_once(
         _resolve_pending_orders_all_bots()
     elif CONFIG.broker_backend == "t212":
         _resolve_t212_pending_orders()
+        # Log position reconciliation after pending orders are resolved.
+        # Uses the enabled paper bots as the reference set.
+        try:
+            with get_session() as _rec_s:
+                _paper_ids = [
+                    b.id for b in _rec_s.query(Bot).all()
+                    if b.enabled and getattr(b, "trading_mode", "paper") == "paper"
+                ]
+            if _paper_ids:
+                _log_t212_reconciliation(_paper_ids, demo=True)
+        except Exception as _rec_exc:
+            log.debug("run_once: T212 reconciliation skipped: %s", _rec_exc)
 
     # ── Pre-run: sync T212 account balance → per-bot initial capital ───────────
     # For fresh bots (no trades yet) the virtual book cash equals

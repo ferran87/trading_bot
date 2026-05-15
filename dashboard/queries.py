@@ -94,9 +94,9 @@ def _set_owner_live_enabled(
 
 @st.cache_data(ttl=60)
 def _reconcile_cached(bot_ids: tuple[int, ...], ibkr_port: int) -> list[dict]:
-    """Cached wrapper around the reconciliation agent."""
+    """Cached wrapper around the IBKR reconciliation agent."""
     try:
-        from agents.reconciliation import reconcile_positions, format_report
+        from agents.reconciliation import reconcile_positions
         discrepancies = reconcile_positions(list(bot_ids), ibkr_port)
         return [
             {
@@ -111,6 +111,18 @@ def _reconcile_cached(bot_ids: tuple[int, ...], ibkr_port: int) -> list[dict]:
     except Exception as exc:
         return [{"ticker": "ERROR", "severity": "ERROR", "diff": 0,
                  "sqlite_qty": 0, "ibkr_qty": 0, "error": str(exc)}]
+
+
+@st.cache_data(ttl=60)
+def _reconcile_t212_cached(bot_ids: tuple[int, ...], demo: bool) -> list[dict]:
+    """Cached wrapper around the T212 reconciliation (60 s TTL)."""
+    try:
+        from agents.reconciliation import reconcile_t212_positions
+        return reconcile_t212_positions(list(bot_ids), demo=demo)
+    except Exception as exc:
+        return [{"yf_ticker": "ERROR", "t212_ticker": "", "severity": "ERROR",
+                 "diff": 0.0, "sqlite_qty": 0.0, "t212_qty": 0.0,
+                 "issue": "exception", "detail": str(exc)}]
 
 
 _EQUITY_COLUMNS    = ["bot_id", "date", "cash", "positions", "total"]

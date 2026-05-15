@@ -34,6 +34,7 @@ from dashboard.queries import (  # noqa: E402
     _load_bots,
     _open_positions,
     _reconcile_cached,
+    _reconcile_t212_cached,
     _run_logs,
     _set_owner_live_enabled,
     _set_owner_mode_strategies,
@@ -809,8 +810,115 @@ def _render_run_logs(bots_subset: pd.DataFrame) -> None:
 
 
 def _render_reconciliation(bots_subset: pd.DataFrame, mode: str) -> None:
-    if CONFIG.broker_backend != "ibkr":
-        return
+    bot_ids = tuple(int(i) for i in bots_subset["id"])
+
+    if CONFIG.broker_backend == "t212":
+        _render_reconciliation_t212(bots_subset, bot_ids, mode)
+    elif CONFIG.broker_backend == "ibkr":
+        _render_reconciliation_ibkr(bots_subset, bot_ids, mode)
+
+
+def _render_reconciliation_t212(
+    bots_subset: pd.DataFrame,
+    bot_ids: tuple[int, ...],
+    mode: str,
+) -> None:
+    """Reconciliation panel for T212 backend: compares SQLite vs live T212 portfolio."""
+    demo = (mode == "paper")
+
+    with st.expander("🔍 Reconciliació SQLite ↔ T212"):
+        col_refresh, col_info = st.columns([1, 4])
+        with col_refresh:
+            if st.button("🔄 Actualitzar", key=f"recon_t212_refresh_{mode}"):
+                _reconcile_t212_cached.clear()
+                st.rerun()
+        with col_info:
+            st.caption("Compara les posicions al SQLite (virtual book del bot) contra el compte T212 real.")
+
+        discrepancies = _reconcile_t212_cached(bot_ids, demo)
+
+        if not discrepancies:
+            st.success("✅ Tot correcte — SQLite i T212 coincideixen en totes les posicions.")
+            return
+
+        # Check for API failure sentinel
+        if len(discrepancies) == 1 and discrepancies[0].get("yf_ticker") in ("T212_UNREACHABLE", "ERROR"):
+            detail = discrepancies[0].get("detail", "")
+            st.error(f"❌ No s'ha pogut connectar a T212. {detail}")
+            return
+
+        # Show discrepancies with explanation for each
+        _ISSUE_LABELS = {
+            "only_in_sqlite": "present al SQLite però **absent a T212**",
+            "only_in_t212":   "present a **T212 però absent al SQLite**",
+            "qty_mismatch":   "quantitat diferent",
+        }
+        _ISSUE_HELP = {
+            "only_in_sqlite": (
+                "El bot va registrar la compra però T212 no la té. "
+                "Possibles causes: ordre rebutjada per T212, cancel·lada per falta de fons, "
+                "o tancada manualment a T212 sense que el bot ho sapigués."
+            ),
+            "only_in_t212": (
+                "T212 té la posició però el bot no en té registre. "
+                "Possibles causes: operació manual des de l'app T212, "
+                "o la compra del bot no es va registrar correctament al SQLite."
+            ),
+            "qty_mismatch": (
+                "Quantitats no coincideixen. Possibles causes: venda parcial, "
+                "arrodoniment de la plataforma, o un trade pendent no resolt."
+            ),
+        }
+
+        for d in discrepancies:
+            issue = d.get("issue", "")
+            label = _ISSUE_LABELS.get(issue, issue)
+            help_text = _ISSUE_HELP.get(issue, "")
+            t2_tick = d.get("t212_ticker", "")
+            t2_display = f" `{t2_tick}`" if t2_tick else ""
+
+            if d["severity"] == "ERROR":
+                st.error(
+                    f"❌ **{d['yf_ticker']}**{t2_display} — {label}  \n"
+                    f"SQLite: **{d['sqlite_qty']:.2f}** accs  ·  T212: **{d['t212_qty']:.2f}** accs  "
+                    f"(diferència: {d['diff']:+.2f})"
+                )
+            else:
+                st.warning(
+                    f"⚠️ **{d['yf_ticker']}**{t2_display} — {label}  \n"
+                    f"SQLite: **{d['sqlite_qty']:.4f}** accs  ·  T212: **{d['t212_qty']:.4f}** accs  "
+                    f"(diferència: {d['diff']:+.4f})"
+                )
+            if help_text:
+                st.caption(help_text)
+
+        # Action guidance
+        st.divider()
+        has_sqlite_only = any(d.get("issue") == "only_in_sqlite" for d in discrepancies)
+        has_t212_only   = any(d.get("issue") == "only_in_t212"   for d in discrepancies)
+
+        if has_sqlite_only:
+            st.info(
+                "**Acció recomanada (SQLite té posicions que T212 no té):** "
+                "Comprova a T212 si la posició va arribar a obrir-se. "
+                "Si no, elimina la posició del SQLite manualment o espera que el bot "
+                "detecti la discrepància en la propera revisió diària."
+            )
+        if has_t212_only:
+            st.info(
+                "**Acció recomanada (T212 té posicions que SQLite no té):** "
+                "Aquestes posicions existeixen al compte real però el bot no les gestiona. "
+                "Si les vols incloure al virtual book, tanca-les manualment a T212 "
+                "o afegeix-les com a trades manuals al SQLite."
+            )
+
+
+def _render_reconciliation_ibkr(
+    bots_subset: pd.DataFrame,
+    bot_ids: tuple[int, ...],
+    mode: str,
+) -> None:
+    """Reconciliation panel for IBKR backend."""
     port_key = "ibkr_port_paper" if mode == "paper" else "ibkr_port"
     ports: set[int] = set()
     for _, bot in bots_subset.iterrows():
@@ -821,7 +929,6 @@ def _render_reconciliation(bots_subset: pd.DataFrame, mode: str) -> None:
         return
 
     with st.expander("🔍 Reconciliació SQLite ↔ IBKR"):
-        bot_ids = tuple(int(i) for i in bots_subset["id"])
         for port in ports:
             st.caption(f"Port IBKR: {port}")
             discrepancies = _reconcile_cached(bot_ids, port)
