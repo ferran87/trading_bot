@@ -131,17 +131,44 @@ def _build_theme_name_map() -> dict[int, str]:
         return {}
 
 
+def _theme_concentration_count(theme_id: int) -> int:
+    """Return # of active conviction-4+ theses on a theme (Phase 4c)."""
+    if not theme_id:
+        return 0
+    try:
+        with get_session() as s:
+            return (
+                s.query(Thesis)
+                .filter(
+                    Thesis.theme_id == theme_id,
+                    Thesis.status == "active",
+                    Thesis.conviction >= 4,
+                )
+                .count()
+            )
+    except Exception:
+        return 0
+
+
 def _render_scorecard(thesis, theme_name_map: dict[int, str]) -> None:
     """Render the 3-criteria evaluation scorecard for a thesis card.
 
     Only rendered if at least one of the four Phase 4b fields is populated.
     Legacy theses (all None) silently produce nothing.
+
+    Phase 4c additions:
+      - Theme concentration badge in the header (when 3+ high-conv theses
+        share the theme)
+      - Sources URL list (from Thesis.sources)
+      - Warnings-at-creation expander (from Thesis.warnings_at_creation)
     """
     has_any = any([
         thesis.theme_id,
         thesis.positioning_vs_theme,
         thesis.execution_evidence,
         thesis.valuation_assessment,
+        getattr(thesis, "sources", None),
+        getattr(thesis, "warnings_at_creation", None),
     ])
     if not has_any:
         return
@@ -153,7 +180,16 @@ def _render_scorecard(thesis, theme_name_map: dict[int, str]) -> None:
     ])
     badge = ("✅" if filled == 3 else "🟡") + f" Scorecard {filled}/3"
 
-    with st.expander(f"📊 {badge} — Marc d'avaluació"):
+    # Phase 4c — concentration badge in the expander label
+    conc_count = _theme_concentration_count(thesis.theme_id)
+    extra_badges = ""
+    if conc_count >= 3 and (thesis.conviction or 0) >= 4:
+        extra_badges += f" · 🟠 {conc_count} tesis convicció-4+ al tema"
+    warnings_list = getattr(thesis, "warnings_at_creation", None) or []
+    if warnings_list:
+        extra_badges += f" · 🔍 {len(warnings_list)} warning(s) numèrics"
+
+    with st.expander(f"📊 {badge}{extra_badges} — Marc d'avaluació"):
         # Criterion 1 — Theme fit
         if thesis.theme_id:
             theme_name = theme_name_map.get(thesis.theme_id, f"Tema #{thesis.theme_id}")
@@ -183,6 +219,32 @@ def _render_scorecard(thesis, theme_name_map: dict[int, str]) -> None:
                 st.success(thesis.valuation_assessment)
             else:
                 st.warning("No avaluat")
+
+        # Phase 4c — Sources block
+        sources_list = getattr(thesis, "sources", None) or []
+        if sources_list:
+            st.markdown("**📎 Fonts primàries**")
+            for url in sources_list:
+                st.markdown(f"- [{url}]({url})")
+
+        # Phase 4c — Warnings the bot was shown at creation time but used anyway
+        if warnings_list:
+            with st.expander(f"🔍 Warnings numèrics presents en crear la tesi ({len(warnings_list)})"):
+                st.caption(
+                    "Aquests són els avisos que `get_fundamentals` va donar al bot "
+                    "abans de crear la tesi. Documentats aquí perquè puguis auditar "
+                    "si el bot els va tenir en compte o els va ignorar."
+                )
+                for w in warnings_list:
+                    st.warning(w)
+
+        # Phase 4c — Concentration acknowledgement (if applicable)
+        if conc_count >= 3 and (thesis.conviction or 0) >= 4:
+            st.warning(
+                f"⚠️ Aquest tema té ja **{conc_count} tesis amb convicció ≥ 4**. "
+                "Risc de concentració: si el driver del tema falla, totes "
+                "podrien caure alhora. Comprova que el bear_case ho reconegui."
+            )
 
 
 # ── Main render function ───────────────────────────────────────────────────────

@@ -372,6 +372,22 @@ class Thesis(Base):
     execution_evidence   = Column(Text, nullable=True)  # what 8-K/earnings show about execution
     valuation_assessment = Column(Text, nullable=True)  # is the price right? (cites real metrics)
 
+    # ── Phase 4c: integrity / sourcing audit trail ──────────────────────────
+    # `sources` is the list of primary-source URLs the analyst supplied to back
+    # any specific factual claims (dollar amounts > $1B, dates of corporate
+    # actions, customer concentration %, switching-cost durations).  Required
+    # at submit_thesis time when such claims appear.
+    # `warnings_at_creation` snapshots the `_warnings` array that get_fundamentals
+    # produced at the moment this thesis was submitted — i.e. which numeric
+    # claims the bot was warned about and chose to use anyway.  Surfaced in
+    # the dashboard so the user can audit the bot's discipline.
+    # Both nullable for legacy theses and Phase 2/4/4b backward compat.
+    # DDL (run in Supabase SQL Editor — never via pooler):
+    #   ALTER TABLE theses ADD COLUMN IF NOT EXISTS sources JSON;
+    #   ALTER TABLE theses ADD COLUMN IF NOT EXISTS warnings_at_creation JSON;
+    sources              = Column(JSON, nullable=True)
+    warnings_at_creation = Column(JSON, nullable=True)
+
     # Tracking
     realized_pnl_eur = Column(Float, nullable=True)
     review_count = Column(Integer, nullable=False, default=0)

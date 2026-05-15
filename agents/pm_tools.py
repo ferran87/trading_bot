@@ -119,6 +119,114 @@ def _size_pct(conviction: int) -> float:
     return round(min(raw, MAX_PCT), 4)
 
 
+# ── Phase 4c: required-risk-categories + concentration helpers ───────────────
+
+# Countries where a meaningful share of business is exposed to
+# geopolitical / tariff / sanction risk that bear_case must address.
+_HIGH_GEO_RISK_COUNTRIES = {
+    "taiwan", "china", "hong kong", "russia", "south korea", "korea",
+}
+
+# Catalan + English keyword options for each required risk category.  The bear
+# case must contain at least one keyword from EACH applicable category list.
+_GEO_RISK_KEYWORDS = [
+    "geopolític", "geopolitic", "geopolitica", "geopolitical",
+    "taiwan", "xina", "china", "korea",
+    "tariff", "aranzel", "sanció", "sancio", "sanction",
+]
+_TARIFF_RISK_KEYWORDS = [
+    "aranzel", "tariff", "trump", "exportació", "exportacio", "export control",
+    "ban", "restricció", "restriccio", "restriction",
+]
+_CAPEX_RISK_KEYWORDS = [
+    "capex", "cicle", "cycle", "sobrecapacitat", "overcapacity",
+    "absorció", "absorcio", "absorption",
+]
+
+
+def _required_risk_categories(info: dict) -> list[dict]:
+    """Compute the bear-case risk categories required for a ticker's profile.
+
+    Each returned item: ``{"keyword_options": [...], "rationale": "..."}``.
+    bear_case must contain at least one keyword from ``keyword_options`` for
+    each item, otherwise submit_thesis rejects.
+
+    Inputs come from ``get_fundamentals`` (an already-fetched yfinance
+    ``info`` dict, optionally augmented with ``_capex_intensity_pct``).
+    """
+    required: list[dict] = []
+    country = (info.get("country") or "").strip().lower()
+    sector = (info.get("sector") or "").strip().lower()
+    industry = (info.get("industry") or "").strip().lower()
+    capex_intensity = info.get("_capex_intensity_pct") or 0
+
+    # Geopolitics — non-Western HQ countries.
+    if country in _HIGH_GEO_RISK_COUNTRIES:
+        required.append({
+            "keyword_options": _GEO_RISK_KEYWORDS,
+            "rationale": (
+                f"country={country!r} → bear_case must address geopolitical / "
+                f"tariff / sanction exposure explicitly (one of: "
+                f"geopolític, taiwan, xina, korea, aranzel, tariff, sanció)."
+            ),
+        })
+
+    # Semis sector — currently subject to active US tariff / export-control debate.
+    if "semiconductor" in industry or "semiconductor" in sector:
+        required.append({
+            "keyword_options": _TARIFF_RISK_KEYWORDS,
+            "rationale": (
+                "semiconductor industry → bear_case must address the active US "
+                "tariff / export-control debate (one of: aranzel, tariff, trump, "
+                "exportació, ban, restricció)."
+            ),
+        })
+
+    # Capex-intensive (capex/revenue > 30%) — sensitivity to demand-cycle pause.
+    if capex_intensity and capex_intensity > 30:
+        required.append({
+            "keyword_options": _CAPEX_RISK_KEYWORDS,
+            "rationale": (
+                f"capex/revenue = {capex_intensity}% → bear_case must address "
+                f"what happens when the demand cycle pauses (one of: capex, "
+                f"cicle, sobrecapacitat, absorció)."
+            ),
+        })
+
+    return required
+
+
+def check_theme_concentration(theme_id: int) -> str:
+    """Count active theses already linked to a theme by conviction.
+
+    Returns JSON with total_active, count_conviction_4_or_5, tickers_at_4_plus,
+    and a guidance string. The agent should call this before proposing
+    conviction ≥ 4 on a theme that may already be saturated with similar names.
+    """
+    from core.db import Thesis as _Thesis
+    with get_session() as s:
+        rows = (
+            s.query(_Thesis)
+            .filter(_Thesis.theme_id == theme_id, _Thesis.status == "active")
+            .all()
+        )
+        high_conv = [t for t in rows if (t.conviction or 0) >= 4]
+        return json.dumps({
+            "theme_id": theme_id,
+            "total_active": len(rows),
+            "count_conviction_4_or_5": len(high_conv),
+            "tickers_at_4_plus": sorted(t.ticker for t in high_conv),
+            "guidance": (
+                "If count_conviction_4_or_5 is already ≥ 3, you must EITHER "
+                "downgrade your proposed conviction by 1 (to 3, status='waiting'), "
+                "OR explicitly justify in bear_case why this Nth name adds "
+                "incremental signal vs. the existing names. Use the keyword "
+                "'concentració' (or concentration / saturat) in bear_case so the "
+                "validator can confirm you acknowledged the overlap."
+            ),
+        })
+
+
 # ── Public tool functions ─────────────────────────────────────────────────────
 
 def get_universe_tickers() -> str:
@@ -208,17 +316,102 @@ def get_fundamentals(ticker: str) -> str:
     except Exception:
         pass
 
+    # ── Phase 4c: numeric integrity cross-checks ────────────────────────────
+    # Compute derived ratios from primary inputs (market_cap / total_revenue,
+    # current_price / forward_eps) and flag any reported ratio that disagrees
+    # by more than 30%.  These warnings travel inside the tool result so the
+    # agent cannot silently drop them when building the thesis.
+    market_cap = info.get("marketCap")
+    total_revenue = info.get("totalRevenue")
+    current_price = info.get("currentPrice") or info.get("regularMarketPrice")
+    forward_eps = info.get("forwardEps")
+    forward_pe_val = info.get("forwardPE")
+    price_to_sales = info.get("priceToSalesTrailing12Months")
+    peg_val = info.get("pegRatio")
+
+    warnings: list[str] = []
+
+    # A. P/S TTM cross-check.
+    derived_ps = None
+    if market_cap and total_revenue:
+        try:
+            derived_ps = market_cap / total_revenue
+        except ZeroDivisionError:
+            derived_ps = None
+
+    if derived_ps is not None and price_to_sales:
+        rel_diff = abs(derived_ps - price_to_sales) / max(derived_ps, 0.01)
+        if rel_diff > 0.30:
+            warnings.append(
+                f"P/S TTM cross-check failed: yfinance reports {price_to_sales:.2f}, "
+                f"market_cap/revenue derives {derived_ps:.2f} (diff {rel_diff*100:.0f}%). "
+                f"Use the derived value ({derived_ps:.2f}) in valuation_assessment."
+            )
+    if (
+        market_cap
+        and market_cap > 10_000_000_000
+        and price_to_sales is not None
+        and price_to_sales < 1.0
+    ):
+        derived_str = f"~{derived_ps:.2f}" if derived_ps else "market_cap / revenue"
+        warnings.append(
+            f"P/S TTM = {price_to_sales:.2f} for a market cap of "
+            f"${market_cap/1e9:.0f}B is structurally implausible (a P/S < 1 implies "
+            f"revenue > market cap, which only happens for distressed names). "
+            f"Almost certainly a yfinance data error — derive from market_cap/revenue ({derived_str})."
+        )
+
+    # B. Forward P/E cross-check.
+    if current_price and forward_eps and forward_pe_val:
+        try:
+            derived_fpe = current_price / forward_eps
+            rel_diff = abs(derived_fpe - forward_pe_val) / max(derived_fpe, 0.01)
+            if rel_diff > 0.30:
+                warnings.append(
+                    f"Forward P/E cross-check failed: yfinance reports {forward_pe_val:.2f}, "
+                    f"price/forward_eps derives {derived_fpe:.2f} (diff {rel_diff*100:.0f}%)."
+                )
+        except ZeroDivisionError:
+            pass
+
+    # C. PEG denominator hint — yfinance never tells us which growth rate
+    # is in the denominator, so any PEG citation in the thesis must spell it out.
+    if peg_val is not None:
+        warnings.append(
+            f"PEG = {peg_val:.2f} reported by yfinance uses an unspecified growth "
+            f"rate. When you cite this in valuation_assessment, write the "
+            f"calculation explicitly: 'PEG = forward_pe ({forward_pe_val}) / "
+            f"5y consensus growth (X%)'."
+        )
+
+    # D. Capex intensity (used by required-risk-categories downstream).
+    capex_intensity_pct = None
+    try:
+        capex = info.get("capitalExpenditures")  # negative in yfinance
+        if capex and total_revenue:
+            ratio = abs(capex) / total_revenue
+            capex_intensity_pct = round(ratio * 100, 1)
+            if ratio > 0.30:
+                warnings.append(
+                    f"Capex/revenue = {capex_intensity_pct}% — capex-intensive business. "
+                    f"bear_case must include 'sensibilitat al cicle de capex' or "
+                    f"equivalent (sobrecapacitat / absorció / cicle)."
+                )
+    except Exception:
+        pass
+
     return json.dumps({
         "ticker": ticker,
         "currency": info.get("currency"),
-        "current_price": info.get("currentPrice") or info.get("regularMarketPrice"),
-        "market_cap": info.get("marketCap"),
+        "current_price": current_price,
+        "market_cap": market_cap,
         "enterprise_value": info.get("enterpriseValue"),
         "trailing_pe": info.get("trailingPE"),
-        "forward_pe": info.get("forwardPE"),
-        "peg_ratio": info.get("pegRatio"),
+        "forward_pe": forward_pe_val,
+        "peg_ratio": peg_val,
         "price_to_book": info.get("priceToBook"),
-        "price_to_sales_ttm": info.get("priceToSalesTrailing12Months"),
+        "price_to_sales_ttm": price_to_sales,
+        "price_to_sales_derived": round(derived_ps, 2) if derived_ps is not None else None,
         "profit_margin_pct": _pct(info.get("profitMargins")),
         "operating_margin_pct": _pct(info.get("operatingMargins")),
         "gross_margin_pct": _pct(info.get("grossMargins")),
@@ -243,6 +436,9 @@ def get_fundamentals(ticker: str) -> str:
         "next_earnings_eps_estimate": eps_estimate_avg,
         "next_earnings_revenue_estimate": revenue_estimate_avg,
         "next_earnings_date_is_estimate": is_estimate,
+        # Phase 4c integrity additions
+        "_capex_intensity_pct": capex_intensity_pct,
+        "_warnings": warnings,
     })
 
 
@@ -596,6 +792,8 @@ def submit_thesis(
     positioning_vs_theme: str | None = None,
     execution_evidence: str | None = None,
     valuation_assessment: str | None = None,
+    # Phase 4c — sourcing audit trail for specific factual claims
+    sources: list[str] | None = None,
 ) -> str:
     """Validate and persist a new thesis for a ticker.
 
@@ -719,6 +917,144 @@ def submit_thesis(
                 ),
             })
 
+    # ── Phase 4c (4a): required-risk-categories from ticker profile ─────────
+    # Re-fetch fundamentals here so the validator sees the same numbers the
+    # agent saw, without trusting the agent to forward them.  yfinance has
+    # session-level caching so this is cheap.  Also lets us snapshot the
+    # warnings into Thesis.warnings_at_creation for the audit trail.
+    info_for_risk: dict = {}
+    fundamentals_warnings: list[str] = []
+    try:
+        import yfinance as yf
+        info_for_risk = yf.Ticker(ticker).info or {}
+        capex = info_for_risk.get("capitalExpenditures")
+        total_rev = info_for_risk.get("totalRevenue")
+        if capex and total_rev:
+            info_for_risk["_capex_intensity_pct"] = round(
+                abs(capex) / total_rev * 100, 1
+            )
+        # Re-derive the same warnings get_fundamentals would have produced,
+        # for snapshot purposes.  We only need enough to surface in dashboard.
+        # (The hard-reject logic below uses info_for_risk directly, not these.)
+        try:
+            fund_json = json.loads(get_fundamentals(ticker))
+            fundamentals_warnings = fund_json.get("_warnings", []) or []
+        except Exception:
+            fundamentals_warnings = []
+    except Exception as fund_exc:
+        log.warning(
+            "submit_thesis: could not re-fetch fundamentals for %s: %s",
+            ticker, fund_exc,
+        )
+
+    required_risks = _required_risk_categories(info_for_risk)
+    if required_risks:
+        bear_lower = bear_case.lower()
+        missing_categories = []
+        for req in required_risks:
+            if not any(kw in bear_lower for kw in req["keyword_options"]):
+                missing_categories.append(req["rationale"])
+        if missing_categories:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    f"bear_case missing required risk categories for {ticker} "
+                    "(this ticker's profile demands them):\n  - "
+                    + "\n  - ".join(missing_categories)
+                ),
+            })
+
+    # ── Phase 4c (4b): PEG must include explicit growth-rate denominator ────
+    # If valuation_assessment cites PEG, it must spell out the calculation:
+    # "PEG = forward_pe (X) / growth (Y%)".  Bare PEG numbers without a
+    # denominator are meaningless (yfinance never tells you which growth rate
+    # is in the denominator) and we've seen the bot quote them as if they were.
+    if valuation_assessment and re.search(r"\bpeg\b", valuation_assessment, re.IGNORECASE):
+        has_denominator = bool(re.search(
+            r"peg.{0,60}(?:/|amb|growth|creixement|consensus|consens).{0,40}\d+(?:[.,]\d+)?\s*%",
+            valuation_assessment,
+            re.IGNORECASE | re.DOTALL,
+        ))
+        if not has_denominator:
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    "valuation_assessment cites PEG without specifying the growth-rate "
+                    "denominator. Write it explicitly, e.g.: 'PEG = forward_pe (22.5) / "
+                    "5y consensus growth (18%) = 1.25'. The validator looks for the "
+                    "pattern 'peg ... / ... NN%' so the calculation is auditable."
+                ),
+            })
+
+    # ── Phase 4c (4c): sourced-claims requirement ────────────────────────────
+    # Specific factual claims (dollar amounts > $1B, dates of corporate
+    # actions, customer concentration %, switching-cost durations) require
+    # primary-source URLs in `sources`.  Without sources, these claims are
+    # exactly the kind that get hallucinated (recent failures: TSM "$31.28B
+    # board approval on May 13" with no link, "Apple = 60% of 3nm revenue"
+    # with no source, "switching cost 12-18 months" with no source).
+    _SPECIFIC_CLAIM_PATTERNS = [
+        # Dollar amounts > $1B with B/billion/bilion/mil milions qualifier
+        r"\$\s*\d+(?:[.,]\d+)?\s*(?:bilions?|billions?|B\b|mil\s+milions?)",
+        # Specific corporate-action dates ("el 13 de maig el board va aprovar")
+        r"el\s+\d{1,2}\s+de\s+\w+.{0,60}(?:board|consell|aprov|anuncia|signa|acord|deal)",
+        # Customer-concentration claims ("Apple representa 60% dels ingressos")
+        r"\b\w+\s+representa\s+\d+\s*%\s+dels?\s+ingressos",
+        r"\b\w+\s+(?:supposes?|accounts?\s+for)\s+\d+\s*%\s+of\s+(?:revenue|sales)",
+        # Switching-cost or moat-duration claims ("12-18 mesos", "X anys de lock-in")
+        r"\b\d+(?:[-–]\d+)?\s+(?:mesos|months|anys|years)\b.{0,40}(?:switching|lock|qualifica|qualify)",
+    ]
+    combined_text = (bull_case or "") + "\n" + (bear_case or "")
+    needs_sources = any(
+        re.search(p, combined_text, re.IGNORECASE | re.DOTALL)
+        for p in _SPECIFIC_CLAIM_PATTERNS
+    )
+    if needs_sources and (not sources or not isinstance(sources, list) or len(sources) == 0):
+        return json.dumps({
+            "status": "error",
+            "message": (
+                "bull_case / bear_case contains specific factual claims (a dollar "
+                "amount > $1B, a corporate-action date, a customer-concentration %, "
+                "or a moat-duration in months/years) but no sources URL list was "
+                "provided. Either remove the specific claim from the text, OR pass "
+                "sources=['https://...'] with primary-source URLs (SEC filing, "
+                "company press release, IR page). If you cannot find a primary "
+                "source, the claim is almost certainly hallucinated — DELETE it."
+            ),
+        })
+
+    # ── Phase 4c (4d): theme-concentration acknowledgement at conviction ≥ 4 ──
+    if theme_id and conviction >= 4:
+        with get_session() as _conc_s:
+            high_conv_count = (
+                _conc_s.query(Thesis)
+                .filter(
+                    Thesis.theme_id == theme_id,
+                    Thesis.status == "active",
+                    Thesis.conviction >= 4,
+                )
+                .count()
+            )
+        if high_conv_count >= 3:
+            ack_pattern = re.compile(
+                r"concentraci|concentration|saturat|nèsis?\s+ja|n[èe]si[ms]?\s+ja",
+                re.IGNORECASE,
+            )
+            if not ack_pattern.search(bear_case):
+                return json.dumps({
+                    "status": "error",
+                    "message": (
+                        f"Theme {theme_id} already has {high_conv_count} active "
+                        "conviction-4+ theses. To add an Nth high-conviction bet on "
+                        "the same theme you must EITHER (a) downgrade conviction to 3 "
+                        "(creates a 'waiting' thesis), OR (b) add an explicit "
+                        "concentration-risk paragraph to bear_case using the keyword "
+                        "'concentració' (or concentration / saturat) — acknowledging "
+                        "that this is the Nth bet on the same driver and that all of "
+                        "them would correlate in a downturn."
+                    ),
+                })
+
     # ── Duplicate check ──────────────────────────────────────────────────────
     with get_session() as s:
         existing = (
@@ -769,6 +1105,9 @@ def submit_thesis(
             positioning_vs_theme=positioning_vs_theme.strip() if positioning_vs_theme else None,
             execution_evidence=execution_evidence.strip() if execution_evidence else None,
             valuation_assessment=valuation_assessment.strip() if valuation_assessment else None,
+            # Phase 4c — sourcing audit trail
+            sources=sources if sources else None,
+            warnings_at_creation=fundamentals_warnings if fundamentals_warnings else None,
         )
         s.add(thesis)
         s.flush()
@@ -1162,6 +1501,24 @@ TOOL_DEFINITIONS: list[dict] = [
         "input_schema": {"type": "object", "properties": {}, "required": []},
     },
     {
+        "name": "check_theme_concentration",
+        "description": (
+            "Returns how many active theses are already linked to a theme and how "
+            "many of those are conviction 4 or 5. CALL THIS before proposing a new "
+            "conviction-4+ thesis on a theme — if 3+ high-conviction theses already "
+            "exist on the same theme, you must either downgrade conviction or add "
+            "an explicit concentration-risk acknowledgement to bear_case (otherwise "
+            "submit_thesis will reject)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "theme_id": {"type": "integer", "description": "Active theme ID from get_active_themes."},
+            },
+            "required": ["theme_id"],
+        },
+    },
+    {
         "name": "submit_thesis",
         "description": (
             "Validate and persist a new investment thesis for a ticker. "
@@ -1229,10 +1586,25 @@ TOOL_DEFINITIONS: list[dict] = [
                 "valuation_assessment": {
                     "type": "string",
                     "description": (
-                        "Criterion 3b — Valuation from get_fundamentals: cite forward P/E, PEG "
-                        "(< 1 = cheap for growth, > 2 = expensive), P/S TTM. Compare vs a peer or "
-                        "sector average. Conclude with: 'cotitza a descompte / paritat / prima "
-                        "respecte sector'. ≥80 chars."
+                        "Criterion 3b — Valuation from get_fundamentals: cite forward P/E, PEG, "
+                        "P/S TTM. If you cite PEG, you MUST write the calculation explicitly: "
+                        "'PEG = forward_pe (X) / 5y growth (Y%)' — submit_thesis rejects bare "
+                        "PEG numbers without a denominator. Compare vs a peer or sector average. "
+                        "Conclude with: 'cotitza a descompte / paritat / prima respecte sector'. "
+                        "≥80 chars."
+                    ),
+                },
+                "sources": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": (
+                        "List of primary-source URLs backing any specific factual claims in "
+                        "bull_case/bear_case (dollar amounts > $1B, dates of corporate "
+                        "actions, customer concentration %, switching-cost durations in "
+                        "months/years). REQUIRED when such claims appear — submit_thesis "
+                        "rejects otherwise. Prefer SEC filings (sec.gov), company press "
+                        "releases, IR pages. If you can't find a primary source, REMOVE the "
+                        "specific claim from the thesis instead of inventing one."
                     ),
                 },
             },
@@ -1319,6 +1691,8 @@ def _dispatch_inner(tool_name: str, tool_input: dict) -> str:
         )
     if tool_name == "get_active_themes":
         return get_active_themes_for_analyst()
+    if tool_name == "check_theme_concentration":
+        return check_theme_concentration(tool_input["theme_id"])
     if tool_name == "submit_thesis":
         return submit_thesis(
             ticker=tool_input["ticker"],
@@ -1335,6 +1709,7 @@ def _dispatch_inner(tool_name: str, tool_input: dict) -> str:
             positioning_vs_theme=tool_input.get("positioning_vs_theme"),
             execution_evidence=tool_input.get("execution_evidence"),
             valuation_assessment=tool_input.get("valuation_assessment"),
+            sources=tool_input.get("sources"),
         )
     if tool_name == "submit_review":
         return submit_review(
