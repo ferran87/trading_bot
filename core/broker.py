@@ -788,7 +788,40 @@ class Trading212Broker:
         )
 
         # IMPORTANT: do NOT wrap in a retry loop — see docstring.
-        order_data = self._post("/equity/orders/market", payload)
+        try:
+            order_data = self._post("/equity/orders/market", payload)
+        except Exception as post_exc:
+            # T212 returns HTTP 400 when the exchange is completely closed (e.g.
+            # overnight before the market opens).  Unlike the "NEW after 120s"
+            # case (where T212 accepted the order), here no order was created at
+            # T212, so there is no order_id to track.  We log the rejection and
+            # return a zero-qty Fill so the executor treats the order as skipped
+            # rather than raising — this lets other pending orders on the same
+            # run still execute, and ensures RunLog is always written.
+            import requests as _req_exc_mod
+            is_400 = (
+                isinstance(post_exc, _req_exc_mod.HTTPError)
+                and post_exc.response is not None
+                and post_exc.response.status_code == 400
+            )
+            if is_400:
+                log.warning(
+                    "Trading212Broker: POST /equity/orders/market returned 400 for "
+                    "%s %s — exchange likely closed, skipping order",
+                    order.side.value, order.ticker,
+                )
+                return Fill(
+                    ticker=order.ticker,
+                    side=order.side,
+                    qty=0.0,
+                    price=0.0,
+                    price_eur=0.0,
+                    fx_rate=1.0,
+                    fee_eur=0.0,
+                    timestamp=datetime.now(tz=timezone.utc),
+                    broker_order_id=None,
+                )
+            raise  # non-400 errors propagate as before
         order_id = order_data["id"]
 
         # Poll until filled — market orders on T212 usually fill in <5 s during

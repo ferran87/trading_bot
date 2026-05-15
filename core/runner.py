@@ -190,6 +190,12 @@ def run_bot(
         summary=summary,
         triggered_by=trigger,
     ))
+    # Commit the RunLog NOW — before any possible re-raise below.  The outer
+    # run_once try/except will call session.rollback() if we re-raise, which
+    # would undo an uncommitted RunLog and make the bot disappear from the
+    # execution registry.  Committing here is safe: the RunLog row is the only
+    # pending change at this point (orders were committed by executor already).
+    session.commit()
 
     # Re-raise so run_once catches it, rolls back, and adds an ErrorLog.
     if exec_error is not None:
