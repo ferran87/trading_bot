@@ -482,11 +482,14 @@ def _resolve_t212_pending_orders() -> None:
                     # For EUR-denominated instruments fxRate is absent or 1.
                     fx_rate    = float(wallet.get("fxRate", 1) or 1)
 
-                    filled_qty  = float(
+                    # T212 returns negative quantities for SELL orders.
+                    # The trades ledger always stores qty as a positive number —
+                    # direction is encoded in the 'side' column ('BUY'/'SELL').
+                    filled_qty = abs(float(
                         fill_data.get("quantity")
                         or order_data.get("filledQuantity")
                         or trade.qty
-                    )
+                    ))
                     # T212 fill price is in the instrument's NATIVE currency
                     # (e.g. USD for MSFT, GS, JPM; EUR for ASML.AS, BNP.PA).
                     # We must divide by fxRate to get the EUR equivalent.
