@@ -66,7 +66,7 @@ def main() -> int:
         type=int,
         metavar="BOT_ID",
         help="Wipe trades, positions, and equity rows for this bot in SQLite "
-        "(back to initial cash). Requires --yes. Does not flatten IBKR.",
+        "(back to initial cash). Requires --yes. Does not flatten broker positions.",
     )
     parser.add_argument(
         "--yes",
@@ -101,7 +101,7 @@ def main() -> int:
             session.commit()
         print(
             f"Reset virtual book for bot_id={bid}. "
-            "IBKR paper positions (if any) were NOT closed."
+            "Broker positions (if any) were NOT closed."
         )
         return 0
 

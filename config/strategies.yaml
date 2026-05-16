@@ -38,7 +38,6 @@ bots:
     trading_mode: paper
     enabled: true
     owner: Ferran
-    ibkr_port_paper: 4002  # IBKR default paper Gateway port — currently running
 
   - id: 8
     name: RSI Compounder (Adria) — Paper
@@ -46,7 +45,6 @@ bots:
     trading_mode: paper
     enabled: false          # enable when Adria's paper Gateway is ready
     owner: Adria
-    ibkr_port_paper: 4012  # Adria paper Gateway port (to be configured)
 
   - id: 9
     name: RSI Compounder (Antonio) — Paper
@@ -54,7 +52,6 @@ bots:
     trading_mode: paper
     enabled: false          # enable when Antonio's paper Gateway is ready
     owner: Antonio
-    ibkr_port_paper: 4014  # Antonio paper Gateway port (to be configured)
 
   # --- Trend Momentum paper bots ---
   - id: 10
@@ -63,7 +60,6 @@ bots:
     trading_mode: paper
     enabled: true
     owner: Ferran
-    ibkr_port_paper: 4002
 
   - id: 11
     name: Trend Momentum (Adria) — Paper
@@ -71,7 +67,6 @@ bots:
     trading_mode: paper
     enabled: false
     owner: Adria
-    ibkr_port_paper: 4012
 
   - id: 12
     name: Trend Momentum (Antonio) — Paper
@@ -79,7 +74,6 @@ bots:
     trading_mode: paper
     enabled: false
     owner: Antonio
-    ibkr_port_paper: 4014
 
   # --- Live bots (disabled by default; toggle from dashboard to enable) ---
   - id: 17
@@ -88,7 +82,6 @@ bots:
     trading_mode: live
     enabled: false
     owner: Ferran
-    ibkr_port: 4001         # IBKR default live Gateway port (to be configured)
     live_capital_since: 2026-05-06  # only deposits from this date count as bot capital
 
   - id: 20
@@ -97,7 +90,6 @@ bots:
     trading_mode: live
     enabled: false
     owner: Ferran
-    ibkr_port: 4001
     live_capital_since: 2026-05-06  # only deposits from this date count as bot capital
 
   - id: 21
@@ -106,7 +98,6 @@ bots:
     trading_mode: live
     enabled: false
     owner: Adria
-    ibkr_port: 4003
 
   - id: 22
     name: Trend Momentum (Antonio) — Live
@@ -114,7 +105,6 @@ bots:
     trading_mode: live
     enabled: false
     owner: Antonio
-    ibkr_port: 4005
 
   - id: 18
     name: RSI Compounder (Adria) — Live
@@ -122,7 +112,6 @@ bots:
     trading_mode: live
     enabled: false
     owner: Adria
-    ibkr_port: 4003         # Adria live Gateway port (to be configured)
 
   - id: 19
     name: RSI Compounder (Antonio) — Live
@@ -130,7 +119,6 @@ bots:
     trading_mode: live
     enabled: false
     owner: Antonio
-    ibkr_port: 4005         # Antonio live Gateway port (to be configured)
 
   # --- AI Thesis Bot (Phase 2) ---
   - id: 30
@@ -139,7 +127,6 @@ bots:
     trading_mode: paper
     enabled: false          # enable after smoke test on feature/ai-thesis-bot branch
     owner: Ferran
-    ibkr_port_paper: 4002
     initial_capital_eur: 5000   # bounded capital for the thesis bot
 
 
@@ -312,25 +299,3 @@ strategies:
     rsi_lookback_days: 15
     sma_period: 50              # stock must be above SMA50
 
-  news_sentiment:
-    universe: [stocks_us, stocks_eu]
-    crypto_universe: crypto_etps
-    rss_template: "https://finance.yahoo.com/rss/headline?s={ticker}"
-    sentiment_model: claude-haiku-4-5-20251001
-    sentiment_threshold: 2.0
-    min_headlines: 3
-    anomaly:
-      volume_zscore: 2.0
-      volume_window: 20
-      gap_pct: 0.03
-    sizing:
-      base_pct: 0.15
-      per_sentiment_point: 0.025      # size_pct = 15 + 2.5*(s-2)
-      cap_pct: 0.20
-    exit:
-      max_days_held: 5
-      move_pct: 0.08
-    crypto:
-      rotation_weekday: 0             # Monday
-      lookback_days: 7
-      sleeve_pct: 0.10

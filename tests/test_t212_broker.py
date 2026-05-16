@@ -324,8 +324,8 @@ class TestT212Fees:
         expected = 5 * 180.0 * 0.0015
         assert fee == pytest.approx(expected, rel=1e-6)
 
-    def test_ibkr_fee_unchanged(self):
-        """IBKR fee table is not affected."""
-        fee = estimate_fee_eur("SXR8.DE", qty=10, price_eur=500.0, backend="ibkr")
+    def test_mock_fee_uses_standard_table(self):
+        """The 'mock' backend (and any non-t212 backend) uses the standard fees table."""
+        fee = estimate_fee_eur("SXR8.DE", qty=10, price_eur=500.0, backend="mock")
         # xetra_eur: per_trade=1.25 + 0.05% = 1.25 + 2.50 = 3.75; min=1.25 → 3.75
         assert fee == pytest.approx(3.75, rel=1e-4)

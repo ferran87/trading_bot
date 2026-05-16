@@ -1,13 +1,13 @@
 """Per-bot virtual-book accounting.
 
 Each bot has its own cash + positions tracked in SQLite. Orders executed
-in the shared IBKR paper account are tagged per bot; we compute P&L from
-the virtual book, NOT from the raw IBKR balance.
+through the shared T212 account are tagged per bot; we compute P&L from
+the virtual book, NOT from the raw T212 balance.
 
 Conventions:
   - Cash is held in EUR.
-  - Fills arrive in EUR (MockBroker already converts; IBKRBroker will apply
-    the FX rate captured at fill time).
+  - Fills arrive in EUR (MockBroker converts internally; Trading212Broker
+    applies the FX rate captured at fill time).
   - Buys debit cash by `qty*price_eur + fee_eur`; sells credit by
     `qty*price_eur - fee_eur`.
 """
@@ -187,9 +187,9 @@ class Portfolio:
 
         After ``commit``, implied cash is ``initial_capital_eur`` with no
         holdings. This only resets the **SQLite virtual ledger** for that
-        bot; it does **not** sell or flatten anything at IBKR. If the same
-        paper account already holds shares from earlier live fills, those
-        broker positions remain until you close them in TWS / Gateway.
+        bot; it does **not** sell or flatten anything at the broker. If the
+        T212 account already holds shares from earlier fills, those broker
+        positions remain until you close them in the T212 UI.
         """
         session.query(Trade).filter(Trade.bot_id == bot_id).delete(
             synchronize_session=False

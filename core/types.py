@@ -35,8 +35,8 @@ class Order:
 class Fill:
     """What the broker actually did (or intends to do for pending orders).
 
-    ``is_pending=True`` means the order was accepted by IBKR but not yet
-    executed (e.g. US stock placed before market open).  ``qty`` and
+    ``is_pending=True`` means the order was accepted by the broker but not
+    yet executed (e.g. US stock placed before market open).  ``qty`` and
     ``price_eur`` are *estimates* based on ``ref_price_eur``; they will be
     corrected by the reconciliation agent once the actual fill is confirmed.
     """

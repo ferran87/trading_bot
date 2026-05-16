@@ -6,7 +6,7 @@
 
 ## What this repo is
 
-Paper-trading stack: **SQLite virtual books per bot**, optional **IBKR paper** execution via **`ib_async`**, signals mostly from **yfinance**. Entry: **`main.py`**. No FastAPI server for the loop.
+Paper-trading stack: **SQLite virtual books per bot**, **Trading 212 paper** execution via REST API, signals mostly from **yfinance**. Entry: **`main.py`**. No FastAPI server for the loop.
 
 ## Read order
 
@@ -16,10 +16,11 @@ Paper-trading stack: **SQLite virtual books per bot**, optional **IBKR paper** e
 
 ## Stack (one line each)
 
-- **DB:** SQLAlchemy + SQLite (`core/db.py`, local `data/trades.db`).
+- **DB:** SQLAlchemy + SQLite or Supabase Postgres (`core/db.py`).
 - **Orchestration:** `core/runner.py` → `run_bot` per enabled bot.
 - **Orders:** `core/executor.py` → `core/risk.py` → `core/broker.py` → `core/portfolio.py`.
-- **Brokers:** `MockBroker` | `IBKRBroker` (`BROKER_BACKEND` in `.env`). IBKR needs `data/contracts.json` from `scripts/resolve_contracts.py`.
+- **Brokers:** `MockBroker` (offline/tests) | `Trading212Broker` (`BROKER_BACKEND=t212` in `.env`). T212 needs `data/t212_instruments.json` from `scripts/resolve_t212_instruments.py`.
+- **T212 auth:** shared in `core/t212_auth.py`; per-owner credentials via `T212_API_KEY_PAPER_<OWNER>` etc.
 - **UI:** `streamlit run dashboard/app.py`.
 
 ## `STRATEGY_REGISTRY` (`core/runner.py`)
@@ -31,8 +32,10 @@ YAML `strategy:` must match a registry key.
 | 1 | `aggressive_momentum` | `strategies/aggressive_momentum.py` |
 | 2 | `mean_reversion` | `strategies/mean_reversion.py` |
 | 3 | `sharp_dip` | `strategies/sharp_dip.py` |
-| (optional) | `etf_momentum` | `strategies/etf_momentum.py` |
-| (not wired) | `news_sentiment` | YAML stub; not in registry yet |
+| 7 | `rsi_compounder` | active paper (Ferran) |
+| 10 | `trend_momentum` | active paper (Ferran) |
+| 9, 12 | rsi_compounder, trend_momentum | active paper (Antonio) |
+| 30 | `ai_thesis` | AI Thesis Bot (Phase 2) |
 
 New strategy: add class under `strategies/`, register dict in `runner.py`, add YAML under `strategies:` and optional `bots:`.
 
@@ -44,16 +47,15 @@ python main.py --init-db
 python main.py --once
 python main.py --once --as-of YYYY-MM-DD --force-rebalance
 python main.py --reset-virtual-book 1 --yes
-python scripts/check_ibkr.py
-python scripts/resolve_contracts.py
+python scripts/resolve_t212_instruments.py
 ```
 
 ## Pitfalls
 
-- **`--reset-virtual-book`:** SQLite only; does **not** close IBKR positions.
-- **MKT + closed market:** timeouts; use RTH or `mock`. Optional `IBKR_ORDER_TIMEOUT_SEC`.
+- **`--reset-virtual-book`:** SQLite only; does **not** close T212 positions.
 - **Shell env overrides `.env`:** e.g. `BROKER_BACKEND` set in the shell wins over `python-dotenv`.
 - **`etf_momentum`:** Monday rebalance unless `main.py --force-rebalance` / `StrategyContext.force_rebalance`.
+- **T212 demo orders:** EU stocks placed pre-market arrive as `NEW`; broker logs a pending fill and reconciles on the next run.
 
 ## Standards
 

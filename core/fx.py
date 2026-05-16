@@ -1,11 +1,11 @@
 """EUR-centric FX helpers.
 
-Every fill comes back from IBKR in its local currency. We convert to EUR
-at the fill timestamp so the virtual book stays in a single unit.
+Every T212 fill comes back in the instrument's local currency. We convert
+to EUR at the fill timestamp so the virtual book stays in a single unit.
 
 Sources, in preference order:
-  1. If the broker has already been given an FX rate (e.g. fetched from
-     IBKR's Forex product at fill time), the caller passes it directly.
+  1. If the broker has already supplied an FX rate (T212 returns one in
+     ``walletImpact.fxRate``), the caller passes it directly.
   2. yfinance "EURXXX=X" quote (daily close). Plenty for EOD cadence.
 
 yfinance results are cached per-process; tests can clear via

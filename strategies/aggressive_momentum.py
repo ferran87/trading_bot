@@ -115,7 +115,7 @@ class AggressiveMomentumStrategy(Strategy):
             delta_value = target_value - existing_value
             if delta_value <= 0:
                 continue
-            qty = round(delta_value / price, 4)  # fractional shares supported by IBKR
+            qty = round(delta_value / price, 4)  # fractional shares supported by T212
             if qty <= 0:
                 continue
             orders.append(

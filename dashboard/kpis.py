@@ -60,7 +60,7 @@ _TICKER_NAMES: dict[str, str] = {
 def ticker_name(ticker: str) -> str:
     """Return a human-readable name for a ticker.
 
-    Priority: contracts.json long_name (via _asset_names) → _TICKER_NAMES → ticker.
+    Priority: hand-curated _asset_names map → _TICKER_NAMES → ticker.
     _asset_names uses @st.cache_data so it's fast after the first call.
     """
     try:
@@ -188,8 +188,8 @@ def _kpis_for(bot: dict, equity_df: pd.DataFrame, trades_df: pd.DataFrame) -> di
             with get_session() as s:
                 cash     = Portfolio.cash_eur(s, int(bot["id"]))
                 positions = Portfolio.open_positions(s, int(bot["id"]))
-                # Use avg_entry_eur as price proxy (market prices not available here;
-                # IBKR-backed KPIs will override this with real market values anyway).
+                # Use avg_entry_eur as price proxy (market prices are
+                # injected later in app.py from live yfinance + T212 data).
                 invested = sum(p.qty * p.avg_entry_eur for p in positions)
             total = cash + invested
         except Exception:

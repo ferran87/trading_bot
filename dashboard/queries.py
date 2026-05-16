@@ -1,7 +1,6 @@
 """Streamlit-cached reads from SQLite and market helpers."""
 from __future__ import annotations
 
-import json
 import logging
 
 import pandas as pd
@@ -14,14 +13,12 @@ from core.db import Bot, EquitySnapshot, Position, RunLog, Trade, get_session
 
 _BOTS_COLUMNS = [
     "id", "name", "strategy", "initial_eur", "enabled",
-    "owner", "trading_mode", "ibkr_port", "ibkr_port_paper",
+    "owner", "trading_mode",
 ]
 
 
 @st.cache_data(ttl=30)
 def _load_bots() -> pd.DataFrame:
-    from core.config import CONFIG
-    bot_cfgs = {b["id"]: b for b in CONFIG.strategies.get("bots", [])}
     with get_session() as s:
         rows = s.query(Bot).order_by(Bot.id).all()
         data = [
@@ -33,8 +30,6 @@ def _load_bots() -> pd.DataFrame:
                 "enabled": bool(b.enabled),
                 "owner": b.owner or f"Bot {b.id}",
                 "trading_mode": getattr(b, "trading_mode", "paper"),
-                "ibkr_port": bot_cfgs.get(b.id, {}).get("ibkr_port"),
-                "ibkr_port_paper": bot_cfgs.get(b.id, {}).get("ibkr_port_paper"),
             }
             for b in rows
         ]
@@ -93,27 +88,6 @@ def _set_owner_live_enabled(
 
 
 @st.cache_data(ttl=60)
-def _reconcile_cached(bot_ids: tuple[int, ...], ibkr_port: int) -> list[dict]:
-    """Cached wrapper around the IBKR reconciliation agent."""
-    try:
-        from agents.reconciliation import reconcile_positions
-        discrepancies = reconcile_positions(list(bot_ids), ibkr_port)
-        return [
-            {
-                "ticker":     d.ticker,
-                "sqlite_qty": d.sqlite_qty,
-                "ibkr_qty":   d.ibkr_qty,
-                "diff":       d.diff,
-                "severity":   d.severity,
-            }
-            for d in discrepancies
-        ]
-    except Exception as exc:
-        return [{"ticker": "ERROR", "severity": "ERROR", "diff": 0,
-                 "sqlite_qty": 0, "ibkr_qty": 0, "error": str(exc)}]
-
-
-@st.cache_data(ttl=60)
 def _reconcile_t212_cached(
     bot_ids: tuple[int, ...], demo: bool, owner: str | None = None,
 ) -> list[dict]:
@@ -165,18 +139,18 @@ def _equity_history() -> pd.DataFrame:
 
 @st.cache_data(ttl=300)
 def _asset_names() -> dict[str, str]:
-    """Carrega els noms complets des de contracts.json, amb fallback per tickers no resolts."""
-    from core.config import DATA_DIR
+    """Hand-curated map from yfinance ticker → display name.
 
-    # Supplementary / override names.
-    # Used for: (a) tickers not in contracts.json, (b) IBKR names that have
-    # awkward casing or truncation (e.g. "LVMH MOET HENNESSY LOUIS VUI").
-    _FALLBACK_NAMES: dict[str, str] = {
-        # Tickers not resolved via IBKR (stocks_aggressive universe)
+    Previously this used ``data/contracts.json`` (from the IBKR setup) as a
+    primary source with this dict as a fallback.  After dropping IBKR support
+    the dict is the only source of truth — every ticker in the universe needs
+    an entry here.
+    """
+    return {
+        # US tech / growth
         "TSLA":    "Tesla Inc",
         "AMD":     "Advanced Micro Devices",
         "PLTR":    "Palantir Technologies",
-        # New US additions
         "AVGO":    "Broadcom Inc",
         "MU":      "Micron Technology",
         "QCOM":    "Qualcomm",
@@ -187,7 +161,7 @@ def _asset_names() -> dict[str, str]:
         "SHOP":    "Shopify Inc",
         "CRM":     "Salesforce Inc",
         "NOW":     "ServiceNow Inc",
-        # New EU additions
+        # EU stocks
         "IFX.DE":  "Infineon Technologies AG",
         "RMS.PA":  "Hermès International",
         "OR.PA":   "L'Oréal SA",
@@ -199,8 +173,12 @@ def _asset_names() -> dict[str, str]:
         "SAP.DE":  "SAP SE",
         "SIE.DE":  "Siemens AG",
         "BAYN.DE": "Bayer AG",
-        # Brand-name overrides (IBKR names have awkward casing / truncation)
         "MC.PA":   "LVMH Moët Hennessy",
+        "TTE.PA":  "TotalEnergies SE",
+        "NESN.SW": "Nestlé SA",
+        "NOVN.SW": "Novartis AG",
+        "ASML.AS": "ASML Holding NV",
+        # ETFs
         "SXR8.DE": "iShares Core S&P 500 UCITS",
         "SXRV.DE": "iShares NASDAQ 100 UCITS",
         "EXSA.DE": "iShares Euro Stoxx 600 UCITS",
@@ -212,40 +190,7 @@ def _asset_names() -> dict[str, str]:
         "ZETH.DE": "21Shares Ethereum ETP",
         "ISJP.DE": "iShares MSCI Japan Small Cap",
         "SXR1.DE": "iShares Core MSCI Pacific ex-JP",
-        "TTE.PA":  "TotalEnergies SE",
-        "NESN.SW": "Nestlé SA",
-        "NOVN.SW": "Novartis AG",
-        "ASML.AS": "ASML Holding NV",
     }
-
-    path = DATA_DIR / "contracts.json"
-    names: dict[str, str] = {}
-    data: dict = {}
-
-    # Layer 1: auto-generate names from contracts.json (yf ticker + IBKR local symbol).
-    if path.exists():
-        data = json.loads(path.read_text(encoding="utf-8"))
-        for ticker, entry in data.items():
-            raw = entry.get("long_name") or ticker
-            nice = _title_name(raw)
-            names[ticker] = nice
-            # Also index by IBKR local symbol so that IBKR portfolio/executions
-            # tables (which use bare symbols like "AIR", "BNP", "TTE") resolve too.
-            ibkr_sym = entry.get("local_symbol") or entry.get("symbol")
-            if ibkr_sym and ibkr_sym not in names:
-                names[ibkr_sym] = nice
-
-    # Layer 2: apply hand-curated overrides — these WIN over auto-generated names.
-    # Also propagate each override to the corresponding IBKR local symbol so that
-    # IBKR-sourced tables use the same corrected name.
-    for yf_ticker, nice_name in _FALLBACK_NAMES.items():
-        names[yf_ticker] = nice_name
-        entry = data.get(yf_ticker, {})
-        ibkr_sym = entry.get("local_symbol") or entry.get("symbol")
-        if ibkr_sym:
-            names[ibkr_sym] = nice_name
-
-    return names
 
 
 def _title_name(s: str) -> str:
@@ -435,39 +380,6 @@ def _run_logs(limit: int = 100) -> pd.DataFrame:
         return pd.DataFrame(data)
 
 
-@st.cache_data(ttl=60)
-def _ibkr_account_eur(port: int) -> dict[str, float] | None:
-    """Fetch cash, invested and total equity in EUR directly from IBKR Gateway.
-
-    Returns dict with keys: cash_eur, invested_eur, total_eur.
-    Returns None if the Gateway is unreachable.
-    """
-    try:
-        from ib_async import IB
-        ib = IB()
-        ib.connect("127.0.0.1", port, clientId=50, timeout=5)
-        account = ib.managedAccounts()[0]
-        ib.sleep(2)
-        vals = ib.accountValues(account)
-        ib.disconnect()
-
-        def _get(tag: str) -> float | None:
-            for ccy in ("EUR", "BASE"):
-                for v in vals:
-                    if v.tag == tag and v.currency == ccy:
-                        return float(v.value)
-            return None
-
-        cash = _get("TotalCashValue")
-        total = _get("NetLiquidation")
-        if cash is None or total is None:
-            return None
-        invested = max(total - cash, 0.0)
-        return {"cash_eur": cash, "invested_eur": invested, "total_eur": total}
-    except Exception:
-        return None
-
-
 def _fetch_prices_eur(tickers: tuple[str, ...]) -> dict[str, float]:
     """Fetch end-of-day close prices in EUR for a list of tickers.
 
@@ -481,92 +393,6 @@ def _fetch_prices_eur(tickers: tuple[str, ...]) -> dict[str, float]:
 
     bars = market_data.prefetch_since(list(tickers), 5)
     return market_data.last_prices_eur(bars)
-
-
-# ── IBKR live portfolio & executions ──────────────────────────────────────────
-
-_IBKR_SENTINEL = 1.7976931348623157e+308  # value IBKR uses for "not yet reported"
-
-
-@st.cache_data(ttl=30)
-def _ibkr_portfolio(port: int) -> pd.DataFrame:
-    """Fetch ALL live positions from the IBKR account (including manual ones).
-
-    Returns a DataFrame with columns:
-      ticker, qty, avg_cost_native, market_price_native, market_value_native,
-      unrealized_pnl_native, realized_pnl_native, contract_currency
-
-    All *_native values are in the account's base currency (USD for US paper
-    accounts). Returns an empty DataFrame if the Gateway is unreachable.
-    """
-    try:
-        from ib_async import IB
-        ib = IB()
-        ib.connect("127.0.0.1", port, clientId=51, timeout=5)
-        account = ib.managedAccounts()[0]
-        ib.sleep(2)
-        items = ib.portfolio(account)
-        ib.disconnect()
-        rows = []
-        for item in items:
-            if float(item.position) == 0:
-                continue
-            rows.append({
-                "ticker":                item.contract.localSymbol or item.contract.symbol,
-                "qty":                   float(item.position),
-                "avg_cost_native":       float(item.averageCost),
-                "market_price_native":   float(item.marketPrice),
-                "market_value_native":   float(item.marketValue),
-                "unrealized_pnl_native": float(item.unrealizedPNL),
-                "realized_pnl_native":   float(item.realizedPNL),
-                "contract_currency":     item.contract.currency,
-            })
-        return pd.DataFrame(rows)
-    except Exception as exc:
-        log.warning("_ibkr_portfolio: port=%d: %s", port, exc)
-        return pd.DataFrame()
-
-
-@st.cache_data(ttl=60)
-def _ibkr_executions(port: int) -> pd.DataFrame:
-    """Fetch recent execution fills from IBKR with actual commissions charged.
-
-    Returns a DataFrame with one row per partial fill and columns:
-      order_id, time, ticker, side, qty, price, commission, comm_currency, realized_pnl
-
-    order_id (IBKR permId) lets the display group partial fills of the same
-    logical order to show total qty and total commission.
-    Commission and realized_pnl are None when IBKR hasn't confirmed them yet.
-    Returns an empty DataFrame if the Gateway is unreachable.
-    """
-    try:
-        from ib_async import IB
-        ib = IB()
-        ib.connect("127.0.0.1", port, clientId=52, timeout=5)
-        ib.sleep(1)
-        fills = ib.reqExecutions()
-        ib.sleep(1)
-        ib.disconnect()
-        rows = []
-        for fill in fills:
-            cr = fill.commissionReport
-            comm = float(cr.commission) if cr and cr.commission != _IBKR_SENTINEL else None
-            rpnl = float(cr.realizedPNL) if cr and cr.realizedPNL != _IBKR_SENTINEL else None
-            rows.append({
-                "order_id":      fill.execution.permId or fill.execution.orderId,
-                "time":          fill.execution.time,
-                "ticker":        fill.contract.localSymbol or fill.contract.symbol,
-                "side":          fill.execution.side,
-                "qty":           float(fill.execution.shares),
-                "price":         float(fill.execution.price),
-                "commission":    comm,
-                "comm_currency": cr.currency if cr else None,
-                "realized_pnl":  rpnl,
-            })
-        return pd.DataFrame(rows)
-    except Exception as exc:
-        log.warning("_ibkr_executions: port=%d: %s", port, exc)
-        return pd.DataFrame()
 
 
 # ── T212 live account & portfolio ─────────────────────────────────────────────

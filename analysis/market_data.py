@@ -1,7 +1,6 @@
 """Market data fetcher.
 
-Phase 1 uses yfinance for everything (daily bars). Phase 1b will add an
-IBKR primary fetch with yfinance fallback.
+Uses yfinance for everything (daily bars).
 
 Everything here is CACHED per process — tests can clear the cache via
 `clear_cache()`. The cache also lets main.py's multiple bots share one

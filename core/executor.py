@@ -119,7 +119,7 @@ def run_orders(
         if fill.is_pending:
             log.info(
                 "PENDING  bot=%d %s %s qty=%.0f est.price=%.4f EUR -- %s "
-                "(order queued at IBKR, will fill when market opens)",
+                "(order queued at broker, will fill when market opens)",
                 bot_id, order.side.value, order.ticker, fill.qty, fill.price_eur,
                 order.signal_reason,
             )

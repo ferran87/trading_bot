@@ -28,12 +28,8 @@ from dashboard.queries import (  # noqa: E402
     _closed_positions,
     _equity_history,
     _fetch_prices_eur,
-    _ibkr_account_eur,
-    _ibkr_executions,
-    _ibkr_portfolio,
     _load_bots,
     _open_positions,
-    _reconcile_cached,
     _reconcile_t212_cached,
     _run_logs,
     _set_owner_live_enabled,
@@ -165,77 +161,37 @@ def _x_axis_dtick(date_range_days: int) -> tuple[str, str]:
 
 # ── KPI helpers ────────────────────────────────────────────────────────────────
 
-def _kpi_with_ibkr(
+def _kpi(
     bot: pd.Series,
     equity_df: pd.DataFrame,
     trades_df: pd.DataFrame,
     mode: str,
-    ibkr_portfolio_df: pd.DataFrame | None = None,
     n_active_bots: int = 1,
 ) -> dict:
-    """Compute KPIs, using IBKR live data when available.
+    """Compute per-bot KPIs from the SQLite virtual book.
 
-    Virtual budget logic (when IBKR is connected and n_active_bots > 0):
-      - Total IBKR equity is split equally across active bots.
-      - Each bot's equity = its share of total equity.
-      - Each bot's invested = sum of IBKR market values of its SQLite positions.
-      - Each bot's virtual cash = its equity share − invested.
+    When the T212 broker is active, the per-bot ``return_pct`` baseline is
+    overridden to use the actual amount deposited in the T212 account for
+    this bot's owner (split across that owner's active bots), instead of the
+    YAML default capital. Other KPI fields come from the per-bot virtual book.
     """
     kpi = _kpis_for(bot, equity_df, trades_df)
-    use_ibkr = CONFIG.broker_backend == "ibkr"
-    use_t212  = CONFIG.broker_backend == "t212"
-
-    if use_t212:
-        # Per-bot KPIs come from the SQLite virtual book (which is per-bot).
-        # T212 account data is account-wide and cannot be split meaningfully
-        # between bots — splitting equally gives identical cards regardless of
-        # what each bot traded.  Only the return_pct baseline is overridden to
-        # use actual deposited capital instead of the settings.yaml default.
-        # Each owner has their own T212 account so we fetch deposits per-owner.
-        demo = (mode != "live")
-        owner = bot.get("owner") if isinstance(bot, dict) else getattr(bot, "owner", None)
-        t212_deposited = _t212_total_deposited(demo, owner=owner)
-        n = max(n_active_bots, 1)
-        deposit_share = (t212_deposited / n if t212_deposited > 0
-                         else float(bot["initial_eur"]))
-        if deposit_share:
-            kpi["return_pct"] = kpi["total_eur"] / deposit_share - 1.0
+    if CONFIG.broker_backend != "t212":
         return kpi
 
-    if not use_ibkr:
-        return kpi
-
-    port_key = "ibkr_port_paper" if mode == "paper" else "ibkr_port"
-    port = bot.get(port_key)
-    if not port or pd.isna(port):
-        return kpi
-
-    ibkr_acc = _ibkr_account_eur(int(port))
-    if not ibkr_acc:
-        return kpi
-
-    total_ibkr = ibkr_acc["total_eur"]
-    bot_share  = total_ibkr / max(n_active_bots, 1)
-
-    # Invested: sum of IBKR market values for this bot's tickers (from SQLite positions)
-    invested_eur = 0.0
-    if ibkr_portfolio_df is not None and not ibkr_portfolio_df.empty:
-        rate = _eur_per_usd()
-        # Which tickers does this bot hold in SQLite?
-        from core.db import Position, get_session
-        with get_session() as s:
-            bot_positions = s.query(Position).filter(Position.bot_id == int(bot["id"])).all()
-        bot_tickers = {p.ticker for p in bot_positions}
-        for _, item in ibkr_portfolio_df.iterrows():
-            if item["ticker"] in bot_tickers:
-                invested_eur += _native_to_eur(
-                    item["market_value_native"], item["contract_currency"], rate
-                )
-
-    kpi["total_eur"]    = bot_share
-    kpi["invested_eur"] = invested_eur
-    kpi["cash_eur"]     = max(bot_share - invested_eur, 0.0)
-    kpi["return_pct"]   = bot_share / float(bot["initial_eur"]) - 1.0 if bot["initial_eur"] else 0.0
+    # Per-bot KPIs come from the SQLite virtual book (which is per-bot).
+    # T212 account data is account-wide and cannot be split meaningfully
+    # between bots.  Only the return_pct baseline is overridden to use actual
+    # deposited capital instead of the settings.yaml default.  Each owner has
+    # their own T212 account so we fetch deposits per-owner.
+    demo = (mode != "live")
+    owner = bot.get("owner") if isinstance(bot, dict) else getattr(bot, "owner", None)
+    t212_deposited = _t212_total_deposited(demo, owner=owner)
+    n = max(n_active_bots, 1)
+    deposit_share = (t212_deposited / n if t212_deposited > 0
+                     else float(bot["initial_eur"]))
+    if deposit_share:
+        kpi["return_pct"] = kpi["total_eur"] / deposit_share - 1.0
     return kpi
 
 
@@ -508,152 +464,60 @@ def _render_equity_chart(bots_subset: pd.DataFrame, equity_df: pd.DataFrame,
     st.plotly_chart(fig, use_container_width=True)
 
 
-def _eur_per_usd() -> float:
-    """Return EUR per 1 USD (e.g. ~0.853 when EUR/USD = 1.17).
-
-    Uses the same fx module as the bot so IBKR market-price conversion is
-    consistent with how trade prices are stored in the database.
-    Falls back to 0.88 if yfinance is temporarily unavailable.
-    """
-    try:
-        from core import fx
-        return fx.eur_per_unit("USD")
-    except Exception:
-        return 0.88
-
-
-def _native_to_eur(value: float, contract_currency: str, rate_eur_per_usd: float) -> float:
-    """Convert a value in the account's native currency (USD) to EUR.
-
-    IBKR reports portfolio values in account base currency (USD for paper).
-    For EUR-quoted contracts the price is in EUR; for USD-quoted it's in USD.
-    We use the contract_currency to know which rate to apply.
-    """
-    if contract_currency == "EUR":
-        return value  # already in EUR
-    return value * rate_eur_per_usd  # USD → EUR
-
-
 def _render_positions(
     bots_subset: pd.DataFrame,
     positions_df: pd.DataFrame,
     floor: float,
-    ibkr_portfolio_df: pd.DataFrame | None = None,
 ) -> None:
-    """Render open positions.
+    """Render open positions from the SQLite virtual book.
 
-    When `ibkr_portfolio_df` is provided (broker=ibkr), IBKR is the source of
-    truth for quantities, prices and P&L.  Each position is attributed to a bot
-    via the SQLite positions table; positions not found in SQLite are shown as
-    "👤 Manual".
+    Live prices come from yfinance.  T212 broker is the source of truth for
+    fills (handled by the runner), so by the time positions are rendered the
+    SQLite book already reflects T212's view.
     """
-    use_ibkr = ibkr_portfolio_df is not None and not ibkr_portfolio_df.empty
+    active = (
+        positions_df[positions_df["bot_id"].isin(bots_subset["id"])].copy()
+        if not positions_df.empty else positions_df
+    )
+    if active.empty:
+        st.caption("Cap posició oberta.")
+        return
 
-    if use_ibkr:
-        # ── IBKR-backed positions display ─────────────────────────────────────
-        from dashboard.queries import _asset_names
-        asset_names = _asset_names()
-        rate = _eur_per_usd()
-        # Build ticker → bot attribution map from SQLite
-        bot_ids_in_scope = set(bots_subset["id"].tolist())
-        sqlite_pos = positions_df[positions_df["bot_id"].isin(bot_ids_in_scope)]
-        ticker_to_bot: dict[str, pd.Series] = {}
-        for _, sp in sqlite_pos.iterrows():
-            ticker_to_bot[sp["ticker"]] = sp
-
-        rows = []
-        for _, item in ibkr_portfolio_df.iterrows():
-            ticker = item["ticker"]
-            qty    = item["qty"]
-            ccy    = item["contract_currency"]
-
-            # Market value and P&L in EUR
-            mkt_val_eur  = _native_to_eur(item["market_value_native"],   ccy, rate)
-            unrlz_eur    = _native_to_eur(item["unrealized_pnl_native"],  ccy, rate)
-            avg_cost_eur = _native_to_eur(item["avg_cost_native"],        ccy, rate)
-            cost_eur     = round(qty * avg_cost_eur, 2)
-            pl_pct       = f"{(unrlz_eur / cost_eur * 100):+.1f}%" if cost_eur else "—"
-
-            # Bot attribution
-            sp = ticker_to_bot.get(ticker)
-            if sp is not None:
-                bot_row = bots_subset.loc[bots_subset["id"] == sp["bot_id"]]
-                strat   = bot_row["strategy"].values[0] if len(bot_row) else ""
-                meta    = _STRATEGY_META.get(strat, {})
-                bot_lbl = f"{meta.get('emoji','🤖')} {meta.get('label', strat)}"
-                entry_dt = sp.get("data_entrada", "—")
-                dies     = (date.today() - entry_dt).days if entry_dt and entry_dt != "—" else "—"
-            else:
-                bot_lbl  = "👤 Manual"
-                entry_dt = "—"
-                dies     = "—"
-
-            rows.append({
-                "bot":           bot_lbl,
-                "ticker":        ticker,
-                "nom":           asset_names.get(ticker, ticker),
-                "qty":           qty,
-                "data entrada":  entry_dt,
-                "dies":          dies,
-                "preu entrada":  f"€{avg_cost_eur:,.2f}",
-                "preu actual":   f"€{(_native_to_eur(item['market_price_native'], ccy, rate)):,.2f}",
-                "cost":          f"€{cost_eur:,.2f}",
-                "valor actual":  f"€{mkt_val_eur:,.2f}",
-                "P&L €":         f"€{unrlz_eur:+,.2f}",
-                "P&L %":         pl_pct,
-            })
-
-        if not rows:
-            st.caption("Cap posició oberta al compte IBKR.")
-            return
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    else:
-        # ── SQLite-backed positions display (mock broker or IBKR offline) ─────
-        active = (
-            positions_df[positions_df["bot_id"].isin(bots_subset["id"])].copy()
-            if not positions_df.empty else positions_df
-        )
-        if active.empty:
-            st.caption("Cap posició oberta.")
-            return
-
-        open_tickers = tuple(active["ticker"].unique())
-        live_prices  = _fetch_prices_eur(open_tickers)
-        today_date   = date.today()
-        rows = []
-        for _, p in active.iterrows():
-            px        = live_prices.get(p["ticker"])
-            cost      = p["cost_eur"]
-            valor     = round(px * p["quantitat"], 2) if px else None
-            pl_eur    = round(valor - cost, 2) if valor else None
-            guany_pct = f"{(valor / cost - 1) * 100:+.1f}%" if valor and cost > 0 else "—"
-            dies      = (today_date - p["data_entrada"]).days if p["data_entrada"] else "—"
-            bot_row   = bots_subset.loc[bots_subset["id"] == p["bot_id"]]
-            owner     = bots_subset.loc[bots_subset["id"] == p["bot_id"], "owner"].values
-            strat     = bot_row["strategy"].values[0] if len(bot_row) else ""
-            meta      = _STRATEGY_META.get(strat, {})
-            rows.append({
-                "bot":          f"{meta.get('emoji','🤖')} {meta.get('label', strat)}",
-                "compte":       owner[0] if len(owner) else f"Bot {p['bot_id']}",
-                "nom":          p["nom"],
-                "ticker":       p["ticker"],
-                "data entrada": p["data_entrada"],
-                "dies":         dies,
-                "preu entrada": f"€{p['preu_entrada_eur']:,.2f}",
-                "preu actual":  f"€{px:,.2f}" if px else "—",
-                "cost":         f"€{cost:,.2f}",
-                "valor actual": f"€{valor:,.2f}" if valor else "—",
-                "guany %":      guany_pct,
-                "P&L €":        f"€{pl_eur:+,.2f}" if pl_eur is not None else "—",
-            })
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+    open_tickers = tuple(active["ticker"].unique())
+    live_prices  = _fetch_prices_eur(open_tickers)
+    today_date   = date.today()
+    rows = []
+    for _, p in active.iterrows():
+        px        = live_prices.get(p["ticker"])
+        cost      = p["cost_eur"]
+        valor     = round(px * p["quantitat"], 2) if px else None
+        pl_eur    = round(valor - cost, 2) if valor else None
+        guany_pct = f"{(valor / cost - 1) * 100:+.1f}%" if valor and cost > 0 else "—"
+        dies      = (today_date - p["data_entrada"]).days if p["data_entrada"] else "—"
+        bot_row   = bots_subset.loc[bots_subset["id"] == p["bot_id"]]
+        owner     = bots_subset.loc[bots_subset["id"] == p["bot_id"], "owner"].values
+        strat     = bot_row["strategy"].values[0] if len(bot_row) else ""
+        meta      = _STRATEGY_META.get(strat, {})
+        rows.append({
+            "bot":          f"{meta.get('emoji','🤖')} {meta.get('label', strat)}",
+            "compte":       owner[0] if len(owner) else f"Bot {p['bot_id']}",
+            "nom":          p["nom"],
+            "ticker":       p["ticker"],
+            "data entrada": p["data_entrada"],
+            "dies":         dies,
+            "preu entrada": f"€{p['preu_entrada_eur']:,.2f}",
+            "preu actual":  f"€{px:,.2f}" if px else "—",
+            "cost":         f"€{cost:,.2f}",
+            "valor actual": f"€{valor:,.2f}" if valor else "—",
+            "guany %":      guany_pct,
+            "P&L €":        f"€{pl_eur:+,.2f}" if pl_eur is not None else "—",
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
 
 def _render_risk_and_trades(
     bots_subset: pd.DataFrame,
     trades_df: pd.DataFrame,
-    ibkr_executions_df: pd.DataFrame | None = None,
     t212_open_orders_df: pd.DataFrame | None = None,
     t212_history_df: pd.DataFrame | None = None,
 ) -> None:
@@ -689,7 +553,7 @@ def _render_risk_and_trades(
                 "(esperant l'obertura del mercat)\n\n" + lines
             )
         else:
-            # ── Pending orders banner from SQLite (IBKR or no live data) ─────
+            # ── Pending orders banner from SQLite (when no live broker data) ──
             active_trades = (
                 trades_df[trades_df["bot_id"].isin(bots_subset["id"])]
                 if not trades_df.empty else trades_df
@@ -704,9 +568,8 @@ def _render_risk_and_trades(
                         f" — est. €{r['total_eur']:,.2f}"
                         for _, r in pending.iterrows()
                     )
-                    broker_name = "IBKR" if ibkr_executions_df is not None else "broker"
                     st.warning(
-                        f"⏳ **{n_pend} {pend_text} a {broker_name}** "
+                        f"⏳ **{n_pend} {pend_text} al broker** "
                         "(s'executaran quan el mercat obri)\n\n" + lines
                     )
 
@@ -730,45 +593,8 @@ def _render_risk_and_trades(
             use_container_width=True, hide_index=True,
         )
 
-    # ── IBKR executions or SQLite fallback ────────────────────────────────────
-    use_ibkr = ibkr_executions_df is not None and not ibkr_executions_df.empty
-    if use_ibkr:
-        st.markdown("**📋 Operacions IBKR (comissions reals)**")
-        rate = _eur_per_usd()
-        df = ibkr_executions_df.copy()
-
-        def _comm_eur(row: pd.Series) -> float | None:
-            if row["commission"] is None:
-                return None
-            ccy = row.get("comm_currency") or "USD"
-            return row["commission"] * rate if ccy == "USD" else row["commission"]
-
-        df["comm_eur"] = df.apply(_comm_eur, axis=1)
-        agg_rows = []
-        group_col = "order_id" if "order_id" in df.columns else None
-        groups = df.groupby(group_col) if group_col and df[group_col].notna().any() \
-            else [(None, df)]
-        for _, grp in groups:
-            total_qty  = grp["qty"].sum()
-            wavg_price = (grp["qty"] * grp["price"]).sum() / total_qty if total_qty else 0
-            total_comm = grp["comm_eur"].sum() if grp["comm_eur"].notna().any() else None
-            rpnl_vals  = grp["realized_pnl"].dropna()
-            total_rpnl = rpnl_vals.sum() if not rpnl_vals.empty else None
-            ccy        = grp["comm_currency"].dropna().iloc[0] if grp["comm_currency"].notna().any() else "USD"
-            agg_rows.append({
-                "hora":       grp["time"].max(),
-                "ticker":     grp["ticker"].iloc[0],
-                "operació":   grp["side"].iloc[0],
-                "quantitat":  int(total_qty),
-                "preu":       round(wavg_price, 4),
-                "comissió €": f"€{total_comm:.2f}" if total_comm is not None else "—",
-                "P&L tancat": f"€{total_rpnl * rate:+.2f}" if total_rpnl is not None and ccy == "USD"
-                              else (f"€{total_rpnl:+.2f}" if total_rpnl is not None else "—"),
-            })
-        agg_df = pd.DataFrame(agg_rows).sort_values("hora", ascending=False)
-        st.dataframe(agg_df, use_container_width=True, hide_index=True)
-    elif not use_t212_hist:
-        # Only show SQLite log when there's no live broker data at all
+    # ── SQLite fallback (only when there's no T212 history available) ─────────
+    if not use_t212_hist:
         active_trades = (
             trades_df[trades_df["bot_id"].isin(bots_subset["id"])]
             if not trades_df.empty else trades_df
@@ -816,8 +642,6 @@ def _render_reconciliation(bots_subset: pd.DataFrame, mode: str) -> None:
 
     if CONFIG.broker_backend == "t212":
         _render_reconciliation_t212(bots_subset, bot_ids, mode)
-    elif CONFIG.broker_backend == "ibkr":
-        _render_reconciliation_ibkr(bots_subset, bot_ids, mode)
 
 
 def _render_reconciliation_t212(
@@ -925,79 +749,6 @@ def _render_reconciliation_t212(
             )
 
 
-def _render_reconciliation_ibkr(
-    bots_subset: pd.DataFrame,
-    bot_ids: tuple[int, ...],
-    mode: str,
-) -> None:
-    """Reconciliation panel for IBKR backend."""
-    port_key = "ibkr_port_paper" if mode == "paper" else "ibkr_port"
-    ports: set[int] = set()
-    for _, bot in bots_subset.iterrows():
-        p = bot.get(port_key)
-        if p and not pd.isna(p):
-            ports.add(int(p))
-    if not ports:
-        return
-
-    with st.expander("🔍 Reconciliació SQLite ↔ IBKR"):
-        for port in ports:
-            st.caption(f"Port IBKR: {port}")
-            discrepancies = _reconcile_cached(bot_ids, port)
-            if not discrepancies:
-                st.success("✅ Tot correcte — SQLite i IBKR coincideixen.")
-            else:
-                has_untracked = any(
-                    d.get("ticker") not in ("IBKR_UNREACHABLE",) and d["ibkr_qty"] > 0 and d["sqlite_qty"] == 0
-                    for d in discrepancies
-                )
-                for d in discrepancies:
-                    if d.get("ticker") == "IBKR_UNREACHABLE":
-                        st.warning("⚡ Gateway IBKR no disponible ara mateix.")
-                    elif d["severity"] == "ERROR":
-                        label = "👤 manual" if d["sqlite_qty"] == 0 else "desajust"
-                        st.error(
-                            f"❌ **{d['ticker']}** ({label}): SQLite={d['sqlite_qty']:.2f}  "
-                            f"IBKR={d['ibkr_qty']:.2f}  (diff={d['diff']:+.2f})"
-                        )
-                    else:
-                        st.warning(
-                            f"⚠️ **{d['ticker']}**: SQLite={d['sqlite_qty']:.4f}  "
-                            f"IBKR={d['ibkr_qty']:.4f}  (diff={d['diff']:+.4f})"
-                        )
-
-                if has_untracked:
-                    st.caption(
-                        "Les posicions 'manual' existeixen a IBKR però no al SQLite. "
-                        "Prem el botó per importar-les automàticament."
-                    )
-                    if st.button("📥 Importar posicions manuals ara", key=f"import_manual_{port}"):
-                        primary = int(bots_subset["id"].iloc[0]) if not bots_subset.empty else None
-                        try:
-                            from agents.reconciliation import import_manual_positions
-                            n = import_manual_positions(list(bot_ids), port, primary_bot_id=primary)
-                            if n:
-                                st.success(f"✅ {n} posició(ns) importada(es) correctament.")
-                                _reconcile_cached.clear()
-                                _open_positions.clear()
-                                _trades.clear()
-                                st.rerun()
-                            else:
-                                st.info("Cap posició nova per importar.")
-                        except Exception as exc:
-                            st.error(f"Error en importar: {exc}")
-
-
-def _get_ibkr_port(bots_subset: pd.DataFrame, mode: str) -> int | None:
-    """Return the first valid IBKR port for this mode's bots."""
-    port_key = "ibkr_port_paper" if mode == "paper" else "ibkr_port"
-    for _, bot in bots_subset.iterrows():
-        p = bot.get(port_key)
-        if p and not pd.isna(p):
-            return int(p)
-    return None
-
-
 def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
                 positions_df: pd.DataFrame, trades_df: pd.DataFrame,
                 floor: float) -> None:
@@ -1013,14 +764,9 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
         return
 
     # ── Fetch live broker data (once per tab render) ──────────────────────────
-    use_ibkr = CONFIG.broker_backend == "ibkr"
-    use_t212  = CONFIG.broker_backend == "t212"
+    use_t212 = CONFIG.broker_backend == "t212"
 
-    ibkr_port = _get_ibkr_port(bots_subset, mode) if use_ibkr else None
-    ibkr_portfolio  = _ibkr_portfolio(ibkr_port)  if ibkr_port else pd.DataFrame()
-    ibkr_executions = _ibkr_executions(ibkr_port) if ibkr_port else pd.DataFrame()
-
-    t212_demo          = (mode != "live")
+    t212_demo = (mode != "live")
     # bots_subset is already filtered to one owner upstream so we can grab any
     # row's owner — that's whose T212 account this tab represents.
     t212_owner: str | None = None
@@ -1045,9 +791,8 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     n_active = len(bots_subset)
     kpis: dict[int, dict] = {}
     for _, bot in bots_subset.iterrows():
-        kpis[int(bot["id"])] = _kpi_with_ibkr(
+        kpis[int(bot["id"])] = _kpi(
             bot, equity_df, trades_df, mode,
-            ibkr_portfolio_df=ibkr_portfolio if use_ibkr else None,
             n_active_bots=n_active,
         )
 
@@ -1055,9 +800,6 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     live_pnls = _compute_live_pnl_per_bot(bots_subset, positions_df)
 
     # Replace stale equity-snapshot totals with cash + live yfinance prices.
-    # Applies to mock and T212 (per-bot KPIs both come from the SQLite virtual
-    # book; T212 live account total is shown separately in the account strip).
-    #
     # IMPORTANT: use Portfolio.cash_eur() (reads from the trades ledger) rather
     # than kpis[bot_id]["cash_eur"] (from the equity snapshot). The snapshot is
     # only written at the end of each daily run, so if new positions filled today
@@ -1065,25 +807,24 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
     # Reading directly from the trades table always gives the correct current cash,
     # preventing the snapshot cash + live positions double-count that inflates
     # "Realitzat" by the cost of same-day fills.
-    if not use_ibkr:
-        from core.db import get_session as _get_session
-        from core.portfolio import Portfolio as _Portfolio
-        with _get_session() as _s:
-            fresh_cash: dict[int, float] = {
-                int(bot["id"]): _Portfolio.cash_eur(_s, int(bot["id"]))
-                for _, bot in bots_subset.iterrows()
-            }
-        for _, bot in bots_subset.iterrows():
-            bot_id = int(bot["id"])
-            lpnl = live_pnls.get(bot_id, {})
-            live_invested = lpnl.get("live_invested_eur", kpis[bot_id]["invested_eur"])
-            cash          = fresh_cash.get(bot_id, kpis[bot_id]["cash_eur"])
-            live_total    = cash + live_invested
-            initial       = float(bot["initial_eur"])
-            kpis[bot_id]["cash_eur"]     = cash
-            kpis[bot_id]["invested_eur"] = live_invested
-            kpis[bot_id]["total_eur"]    = live_total
-            kpis[bot_id]["return_pct"]   = (live_total / initial - 1.0) if initial else 0.0
+    from core.db import get_session as _get_session
+    from core.portfolio import Portfolio as _Portfolio
+    with _get_session() as _s:
+        fresh_cash: dict[int, float] = {
+            int(bot["id"]): _Portfolio.cash_eur(_s, int(bot["id"]))
+            for _, bot in bots_subset.iterrows()
+        }
+    for _, bot in bots_subset.iterrows():
+        bot_id = int(bot["id"])
+        lpnl = live_pnls.get(bot_id, {})
+        live_invested = lpnl.get("live_invested_eur", kpis[bot_id]["invested_eur"])
+        cash          = fresh_cash.get(bot_id, kpis[bot_id]["cash_eur"])
+        live_total    = cash + live_invested
+        initial       = float(bot["initial_eur"])
+        kpis[bot_id]["cash_eur"]     = cash
+        kpis[bot_id]["invested_eur"] = live_invested
+        kpis[bot_id]["total_eur"]    = live_total
+        kpis[bot_id]["return_pct"]   = (live_total / initial - 1.0) if initial else 0.0
 
     initial_total = sum(float(bot["initial_eur"]) for _, bot in bots_subset.iterrows())
 
@@ -1139,18 +880,11 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
             )
 
     st.markdown("#### 📂 Posicions obertes")
-    if use_ibkr and not ibkr_portfolio.empty:
-        st.caption("Font: IBKR Gateway (temps real) · Posicions del bot i manuals.")
-    elif use_ibkr:
-        st.caption("⚠️ IBKR Gateway no disponible — mostrant SQLite.")
-    elif use_t212 and not t212_portfolio.empty:
+    if use_t212 and not t212_portfolio.empty:
         st.caption("Font: Trading 212 API (en viu) · Posicions del compte.")
     elif use_t212:
         st.caption("Font: SQLite · el compte T212 no retorna posicions obertes en mode demo.")
-    _render_positions(
-        bots_subset, positions_df, floor,
-        ibkr_portfolio_df=ibkr_portfolio if use_ibkr else None,
-    )
+    _render_positions(bots_subset, positions_df, floor)
 
     # ── Closed positions ──────────────────────────────────────────────────────
     closed_df = _closed_positions()
@@ -1188,7 +922,6 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
 
     _render_risk_and_trades(
         bots_subset, trades_df,
-        ibkr_executions_df=ibkr_executions if use_ibkr else None,
         t212_open_orders_df=t212_open_orders if use_t212 else None,
         t212_history_df=t212_order_history if use_t212 else None,
     )

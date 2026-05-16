@@ -3,31 +3,29 @@
 - `BrokerInterface`     : protocol all brokers implement.
 - `MockBroker`          : fills at `ref_price_eur` + configured slippage; fee from
                           `settings.yaml` fee table by venue.
-- `IBKRBroker`          : paper/live trading via `ib_async`; contracts from
-                          `data/contracts.json`; fills + commission converted to EUR.
 - `Trading212Broker`    : REST API trading via Trading 212; instrument map from
                           `data/t212_instruments.json`; fills polled for 120 seconds.
 
-Three broker models — key differences at a glance
---------------------------------------------------
-Property              MockBroker          IBKRBroker                Trading212Broker
---------------------  ------------------  ------------------------  --------------------------
-Ticker input          yfinance as-is      yfinance → contracts.json yfinance → t212_instruments.json
-Fill timing           Immediate           5-second poll; pending    120-second poll; pending on
-                                          on PreSubmitted/timeout   NEW status at timeout
-Pending fills?        Never               Yes                       Yes
-Qty rounding          Allows floats       Floors to whole shares    Floors to whole shares
-Fill price currency   Input currency      Local ccy → EUR in fill   Local ccy → EUR at fill
-Fees                  settings.yaml table IB commission             T212 taxes array (may be empty
-                                                                    in demo; falls back to 0.15% FX)
-Required data file    None                data/contracts.json       data/t212_instruments.json
+Two broker models — key differences at a glance
+-----------------------------------------------
+Property              MockBroker          Trading212Broker
+--------------------  ------------------  --------------------------
+Ticker input          yfinance as-is      yfinance → t212_instruments.json
+Fill timing           Immediate           120-second poll; pending on NEW
+                                          status at timeout
+Pending fills?        Never               Yes
+Qty rounding          Allows floats       Floors to whole shares
+Fill price currency   Input currency      Local ccy → EUR at fill
+Fees                  settings.yaml table T212 taxes array (may be empty
+                                          in demo; falls back to 0.15% FX)
+Required data file    None                data/t212_instruments.json
 
-Pending fills (IBKR + T212)
-----------------------------
+Pending fills (T212)
+--------------------
 `broker.place_market_order()` returns `Fill(is_pending=True)` when the order has not
 yet been confirmed at timeout. `executor.run_orders()` logs these but does NOT call
 `Portfolio.apply_fill()` — the virtual book is left unchanged. On the next bot run,
-`_resolve_pending_orders_all_bots()` in `core/runner.py` polls for completion and
+`_resolve_t212_pending_orders()` in `core/runner.py` polls for completion and
 applies the fill retroactively. MockBroker never returns a pending fill.
 
 EU orders on T212 commonly return HTTP 404 for the first ~10 polls right after
@@ -157,383 +155,15 @@ class MockBroker:
         )
 
 
-# --- IBKRBroker --------------------------------------------------------------
-
-
-class IBKRBroker:
-    """ib_async-backed broker for paper trading.
-
-    Responsibilities:
-      * Connect to IB Gateway/TWS, refuse any non-paper account.
-      * Resolve Contract from ``data/contracts.json`` (populated by
-        ``scripts/resolve_contracts.py``). If a ticker isn't cached, fail
-        loud rather than guessing.
-      * Submit MarketOrder, wait for fill, grab the actual commission from
-        the CommissionReport event, convert both price and commission to
-        EUR at the fill-timestamp FX rate.
-
-    One IBKRBroker instance is used for ALL bots per ``run_once`` call;
-    clientId is taken from ``IBKR_CLIENT_ID_BASE`` plus an offset we bump
-    per session so repeated runs during the same Gateway session don't
-    collide.
-    """
-
-    _next_client_offset: int = 0
-
-    def __init__(self, port: int | None = None, client_id: int | None = None, timeout: float | None = None) -> None:
-        self._ib = None
-        if timeout is None:
-            timeout = float(os.environ.get("IBKR_ORDER_TIMEOUT_SEC", "120"))
-        self._timeout = timeout
-        self._port = port  # overrides IBKR_PORT env var when set
-        self._client_id = client_id
-        self._contracts_cache: dict | None = None
-        self._account: str | None = None
-
-    # -- setup / teardown --
-
-    def connect(self) -> None:
-        from ib_async import IB
-
-        host = os.environ.get("IBKR_HOST", "127.0.0.1")
-        port = self._port if self._port is not None else int(os.environ.get("IBKR_PORT", "4002"))
-        base = int(os.environ.get("IBKR_CLIENT_ID_BASE", "100"))
-
-        if self._client_id is None:
-            IBKRBroker._next_client_offset += 1
-            self._client_id = base + IBKRBroker._next_client_offset
-
-        self._ib = IB()
-        self._ib.connect(host, port, clientId=self._client_id, timeout=self._timeout)
-
-        accounts = self._ib.managedAccounts()
-        if not accounts:
-            self._ib.disconnect()
-            raise RuntimeError("IBKRBroker: connected but no managed accounts returned.")
-        self._account = accounts[0]
-        # Known IBKR paper-account prefixes. DU = US/global paper, DF = advisor
-        # demo, DW = some EU-domiciled paper accounts.
-        _PAPER_PREFIXES = ("DU", "DF", "DW")
-        is_known_paper = self._account.startswith(_PAPER_PREFIXES)
-        require_paper = os.environ.get("IBKR_REQUIRE_PAPER", "1") == "1"
-        if not is_known_paper:
-            msg = (
-                f"IBKRBroker: account {self._account!r} does not match known paper "
-                f"prefixes {_PAPER_PREFIXES}. If this IS a paper account with a "
-                "non-standard prefix (common for EU IBKR accounts), set "
-                "IBKR_REQUIRE_PAPER=0 in .env to bypass this check. "
-                "NEVER set this on a live account."
-            )
-            if require_paper:
-                self._ib.disconnect()
-                raise RuntimeError(msg)
-            log.warning(msg)
-        log.info("IBKRBroker connected: account=%s clientId=%d",
-                 self._account, self._client_id)
-
-    def disconnect(self) -> None:
-        if self._ib is not None and self._ib.isConnected():
-            self._ib.disconnect()
-        self._ib = None
-
-    # -- contract resolution --
-
-    def _load_contracts(self) -> dict:
-        if self._contracts_cache is None:
-            import json
-            from core.config import DATA_DIR
-
-            path = DATA_DIR / "contracts.json"
-            if not path.exists():
-                raise RuntimeError(
-                    f"IBKRBroker: {path} missing. Run "
-                    f"`python scripts/resolve_contracts.py` first."
-                )
-            self._contracts_cache = json.loads(path.read_text(encoding="utf-8"))
-        return self._contracts_cache
-
-    def _contract_for(self, yf_ticker: str):
-        from ib_async import Stock
-
-        cache = self._load_contracts()
-        entry = cache.get(yf_ticker)
-        if entry is None:
-            raise RuntimeError(
-                f"IBKRBroker: no contract for {yf_ticker!r} in contracts.json. "
-                f"Re-run scripts/resolve_contracts.py."
-            )
-        c = Stock(
-            symbol=entry["symbol"],
-            exchange=entry["exchange"],
-            currency=entry["currency"],
-        )
-        c.conId = entry["con_id"]
-        if entry.get("primary_exchange"):
-            c.primaryExchange = entry["primary_exchange"]
-        return c, entry
-
-    # -- orders --
-
-    def place_market_order(self, order: Order) -> Fill:
-        from ib_async import MarketOrder
-
-        if self._ib is None or not self._ib.isConnected():
-            raise RuntimeError("IBKRBroker: not connected. Call connect() first.")
-
-        contract, entry = self._contract_for(order.ticker)
-        # Use SMART routing so IBKR picks the best venue.
-        # Direct-exchange routing (e.g. SBF, IBIS) triggers Precautionary
-        # Settings error 10311.  conId already uniquely identifies the instrument
-        # so SMART routing resolves correctly.
-        contract.exchange = "SMART"
-        action = "BUY" if order.side is Side.BUY else "SELL"
-        qty = abs(order.qty)
-
-        # IBKR API rejects fractional quantities (error 10243) for most
-        # instruments. Floor to whole shares; if result is 0, skip the order.
-        import math
-        qty = math.floor(qty)
-        if qty == 0:
-            log.warning(
-                "IBKRBroker: %s %s qty rounded down to 0 — skipping "
-                "(increase capital or check per_position_pct)",
-                action, order.ticker,
-            )
-            # Return a zero fill so the caller doesn't crash.
-            from datetime import datetime, timezone
-            from core.types import Fill, Side as _Side
-            return Fill(
-                ticker=order.ticker,
-                side=order.side,
-                qty=0.0,
-                price=0.0,
-                price_eur=0.0,
-                fx_rate=1.0,
-                fee_eur=0.0,
-                timestamp=datetime.now(tz=timezone.utc),
-                broker_order_id=None,
-            )
-
-        ib_order = MarketOrder(action=action, totalQuantity=qty)
-        ib_order.tif = "DAY"
-        ib_order.outsideRth = False
-        # Required when the Gateway manages multiple sub-accounts (IBKR error 435).
-        if self._account:
-            ib_order.account = self._account
-
-        log.info(
-            "IBKRBroker: placing %s %.0f %s @MKT (%s/%s %s)",
-            action, qty, order.ticker, entry["symbol"], entry["exchange"],
-            entry["currency"],
-        )
-        trade = self._ib.placeOrder(contract, ib_order)
-
-        # ── Phase 1: brief wait to let IBKR classify the order ────────────────
-        # PreSubmitted  → order accepted by IB but exchange not open yet
-        #                 (typical for US stocks placed before 15:30 CEST).
-        #                 We return a *pending* fill immediately so the virtual
-        #                 book reserves the capital; the order stays live at
-        #                 IBKR and will fill when the exchange opens.
-        # Submitted     → order is live at the exchange; wait for fill normally.
-        PRESUBMIT_WAIT_SEC = 5
-        initial_wait = 0.0
-        while initial_wait < PRESUBMIT_WAIT_SEC and not trade.isDone():
-            self._ib.waitOnUpdate(timeout=1.0)
-            initial_wait += 1.0
-            if trade.orderStatus.status in ("Submitted", "Filled"):
-                break  # it's live — proceed to normal fill wait
-
-        if trade.orderStatus.status == "PreSubmitted" and not trade.isDone():
-            log.info(
-                "IBKRBroker: %s order PreSubmitted (market not open yet) — "
-                "recording as pending; will fill when exchange opens",
-                order.ticker,
-            )
-            return self._build_pending_fill(order, trade, entry)
-
-        # ── Phase 2: wait for the confirmed fill ───────────────────────────────
-        deadline = self._timeout - initial_wait
-        while not trade.isDone():
-            self._ib.waitOnUpdate(timeout=1.0)
-            deadline -= 1.0
-            if deadline <= 0:
-                current_status = trade.orderStatus.status
-                # "Submitted" means the order is live at IBKR but hasn't filled yet.
-                # This happens when the exchange is closed (e.g. EU orders at 08:30
-                # before 09:00 open, or US orders before 15:30 CEST).  Don't cancel —
-                # leave the order alive at IBKR and record a pending fill so the
-                # virtual book reserves the capital.  The reconciliation agent will
-                # update the actual fill price once the exchange opens.
-                if current_status == "Submitted":
-                    log.info(
-                        "IBKRBroker: %s still Submitted after %.0fs — market likely "
-                        "closed, recording as pending fill (order stays live at IBKR)",
-                        order.ticker, self._timeout,
-                    )
-                    return self._build_pending_fill(order, trade, entry)
-                log.warning(
-                    "IBKRBroker: %s order still %s after %.0fs — canceling at broker",
-                    order.ticker, current_status, self._timeout,
-                )
-                self._ib.cancelOrder(ib_order)
-                for _ in range(20):
-                    self._ib.waitOnUpdate(timeout=0.5)
-                    if trade.isDone():
-                        break
-                # The order may have filled naturally during the cancel window
-                # (cancel is a no-op if IBKR already processed all fills).
-                if trade.orderStatus.status == "Filled":
-                    log.info(
-                        "IBKRBroker: %s filled during cancel window — recording fill",
-                        order.ticker,
-                    )
-                    break  # exit the while-not-done loop; _build_fill below
-                raise RuntimeError(
-                    f"IBKRBroker: order for {order.ticker} did not fill within "
-                    f"{self._timeout}s (last status={trade.orderStatus.status!r}). "
-                    "MKT on Xetra listings needs the exchange open (Mon–Fri RTH)."
-                )
-
-        status = trade.orderStatus.status
-        if status != "Filled":
-            # "Cancelled" with 0 fills and 0 avg price means IBKR rejected the order
-            # before any exchange activity — most common cause is that the paper
-            # simulation cancelled a "Submitted" US-stock order because the exchange
-            # simulation is unavailable outside US RTH.  Treat as pending fill so
-            # the virtual book is consistent; the reconciliation agent corrects it.
-            if (
-                status in ("Cancelled", "ApiCancelled")
-                and trade.orderStatus.filled == 0
-                and trade.orderStatus.avgFillPrice == 0.0
-            ):
-                log.info(
-                    "IBKRBroker: %s cancelled by IBKR with 0 fills (exchange likely "
-                    "closed) — recording as pending fill",
-                    order.ticker,
-                )
-                return self._build_pending_fill(order, trade, entry)
-            raise RuntimeError(
-                f"IBKRBroker: {order.ticker} ended with status={status!r} "
-                f"(avgFillPrice={trade.orderStatus.avgFillPrice})"
-            )
-
-        return self._build_fill(order, trade, entry)
-
-    # -- fill aggregation --
-
-    def _build_pending_fill(self, order: Order, trade, contract_entry: dict) -> Fill:
-        """Return an *estimated* Fill for a PreSubmitted order.
-
-        The order is live at IBKR and will fill when the exchange opens.
-        We use ``order.ref_price_eur`` as the price estimate and the planned
-        (floored) qty so the virtual book reserves the capital immediately.
-        The reconciliation agent will correct these values once the actual
-        fill arrives.
-
-        We store the IBKR ``permId`` (not the session-scoped orderId) in
-        ``broker_order_id`` so reconciliation can look it up across sessions.
-        """
-        from core import fx
-
-        ccy = contract_entry["currency"]
-        fx_rate = fx.eur_per_unit(ccy)
-        # estimated local-currency price
-        est_local = order.ref_price_eur / fx_rate if fx_rate > 0 else order.ref_price_eur
-        planned_qty = float(trade.order.totalQuantity)  # already floored
-        perm_id = str(trade.order.permId) if trade.order.permId else None
-
-        return Fill(
-            ticker=order.ticker,
-            side=order.side,
-            qty=planned_qty,
-            price=est_local,
-            price_eur=order.ref_price_eur,
-            fx_rate=fx_rate,
-            fee_eur=estimate_fee_eur(order.ticker, planned_qty, order.ref_price_eur),
-            timestamp=datetime.now(tz=timezone.utc),
-            broker_order_id=perm_id,
-            is_pending=True,
-        )
-
-    def _build_fill(self, order: Order, trade, contract_entry: dict) -> Fill:
-        """Aggregate executions from `trade.fills` into a single Fill record.
-
-        A single market order may be split into multiple partial fills;
-        we take the qty-weighted average fill price and the sum of
-        commissions (with their own FX conversion).
-        """
-        from core import fx
-
-        if not trade.fills:
-            raise RuntimeError(
-                f"IBKRBroker: {order.ticker} status=Filled but trade.fills is empty"
-            )
-
-        total_qty = 0.0
-        total_notional_local = 0.0
-        commission_eur = 0.0
-        last_ts = None
-        order_id = None
-
-        for f in trade.fills:
-            q = float(f.execution.shares)
-            p = float(f.execution.price)
-            total_qty += q
-            total_notional_local += q * p
-            last_ts = f.time or last_ts
-            order_id = order_id or str(f.execution.orderId)
-
-            cr = getattr(f, "commissionReport", None)
-            if cr is not None and cr.commission:
-                commission_eur += fx.to_eur(
-                    float(cr.commission),
-                    cr.currency or contract_entry["currency"],
-                )
-
-        if total_qty <= 0:
-            raise RuntimeError(f"IBKRBroker: zero total qty filled for {order.ticker}")
-
-        avg_price_local = total_notional_local / total_qty
-        ccy = contract_entry["currency"]
-        fx_rate = fx.eur_per_unit(ccy)
-        avg_price_eur = avg_price_local * fx_rate
-
-        # If commission was missing from every fill (can happen on paper,
-        # IBKR sometimes drops CommissionReport), fall back to our fee
-        # estimate so the trade isn't recorded as "free".
-        if commission_eur <= 0:
-            commission_eur = estimate_fee_eur(order.ticker, total_qty, avg_price_eur)
-            log.warning(
-                "IBKRBroker: no commission report for %s; using estimate €%.2f",
-                order.ticker, commission_eur,
-            )
-
-        from datetime import datetime, timezone
-        ts = last_ts or datetime.now(tz=timezone.utc)
-
-        return Fill(
-            ticker=order.ticker,
-            side=order.side,
-            qty=total_qty,
-            price=avg_price_local,
-            price_eur=avg_price_eur,
-            fx_rate=fx_rate,
-            fee_eur=commission_eur,
-            timestamp=ts,
-            broker_order_id=order_id,
-        )
-
 
 def get_broker() -> BrokerInterface:
     """Factory driven by BROKER_BACKEND env var."""
     backend = CONFIG.broker_backend
     if backend == "mock":
         return MockBroker()
-    if backend == "ibkr":
-        return IBKRBroker()
     if backend == "t212":
         return Trading212Broker()
-    raise ValueError(f"Unknown BROKER_BACKEND={backend!r}; expected 'mock', 'ibkr', or 't212'.")
+    raise ValueError(f"Unknown BROKER_BACKEND={backend!r}; expected 'mock' or 't212'.")
 
 
 # --- Trading212Broker --------------------------------------------------------
@@ -559,7 +189,7 @@ class Trading212Broker:
       - FX conversion fee: 0.15% on every trade in a non-account currency
         (e.g. USD stock in an EUR account).
       - Fractional shares are supported; we floor to whole shares for
-        consistency with IBKR behavior.
+        consistency with the rest of the system (positions, fills, P&L).
     """
 
     _ORDER_POLL_INTERVAL_SEC = 2.0
@@ -750,8 +380,8 @@ class Trading212Broker:
         t212_ticker = self._resolve_ticker(order.ticker)
         ccy = self._instrument_currency(order.ticker)
 
-        # Floor to whole shares for IBKR-compatible behavior.
-        # T212 supports fractional shares, but strategies size in whole units.
+        # Floor to whole shares — T212 supports fractional shares but our
+        # strategies size in whole units.
         qty = math.floor(abs(order.qty))
         if qty == 0:
             log.warning(
@@ -819,9 +449,9 @@ class Trading212Broker:
         # Poll until filled — market orders on T212 usually fill in <5 s during
         # market hours.  Outside hours (pre-market / post-market) the order sits
         # as 'NEW' until the exchange opens.  We treat 'NEW' at timeout the same
-        # way as IBKR's 'Submitted': record a pending fill at the reference price
-        # rather than raising — the order stays live at T212 and will fill when
-        # the market opens.
+        # way as a pending fill: record at the reference price rather than
+        # raising — the order stays live at T212 and will fill when the
+        # market opens.
         deadline = time.monotonic() + self._ORDER_POLL_TIMEOUT_SEC
         while order_data.get("status") not in ("FILLED", "CANCELLED", "REJECTED"):
             if time.monotonic() >= deadline:
@@ -859,7 +489,7 @@ class Trading212Broker:
 
     def _build_pending_fill(self, order: Order, order_id: str) -> Fill:
         """Return a pending Fill using the reference price when the order is live
-        but the market is closed.  Mirrors IBKRBroker._build_pending_fill.
+        but the market is closed.
 
         IMPORTANT: use the floored integer qty (same as what was sent to T212),
         not order.qty (the strategy's fractional target).  T212 only executes

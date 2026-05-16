@@ -140,12 +140,9 @@ def run_bot(
     orders = strategy.propose_orders(snapshot, ctx)
     log.info("bot=%d proposed %d orders", bot.id, len(orders))
 
-    # Connect to the broker NOW — market data is already downloaded so the
-    # ib_async asyncio event loop won't be running while yfinance makes its
-    # HTTP requests (which causes a silent hang on Windows ProactorEventLoop).
-    # Callers must NOT call broker.connect() before run_bot(); disconnect()
-    # is still handled by run_once()'s finally block (it's a safe no-op if
-    # connect was never called).
+    # Connect to the broker now (after market data is downloaded).  Callers
+    # must NOT call broker.connect() before run_bot(); disconnect() is still
+    # handled by run_once()'s finally block (safe no-op if never connected).
     broker.connect()
 
     # Execute orders — wrapped so RunLog is always written even on failure.
@@ -205,27 +202,11 @@ def run_bot(
 
 
 def _broker_for_bot(bot_id: int, trading_mode: str = "paper") -> "BrokerInterface":
-    """Return a broker wired to the per-bot IBKR port, respecting paper/live mode."""
-    bot_cfgs = {b["id"]: b for b in CONFIG.strategies.get("bots", [])}
-    cfg = bot_cfgs.get(bot_id, {})
-    if trading_mode == "live":
-        ibkr_port = cfg.get("ibkr_port")
-    else:
-        ibkr_port = cfg.get("ibkr_port_paper") or cfg.get("ibkr_port")
+    """Return a broker for a bot, respecting paper/live mode + owner credentials."""
     backend = CONFIG.broker_backend
     if backend == "mock":
         from core.broker import MockBroker
         return MockBroker()
-    if backend == "ibkr":
-        if ibkr_port is None:
-            port_key = "ibkr_port" if trading_mode == "live" else "ibkr_port_paper"
-            raise ValueError(
-                f"bot_id={bot_id} trading_mode={trading_mode!r}: "
-                f"'{port_key}' not set in strategies.yaml — cannot connect to IBKR. "
-                f"Add the port number for this bot and re-run."
-            )
-        from core.broker import IBKRBroker
-        return IBKRBroker(port=int(ibkr_port))
     if backend == "t212":
         from core.broker import Trading212Broker
         # Demo mode for paper trading; live mode when trading_mode=="live"
@@ -243,78 +224,6 @@ def _broker_for_bot(bot_id: int, trading_mode: str = "paper") -> "BrokerInterfac
             log.warning("_broker_for_bot: could not resolve owner for bot=%d: %s", bot_id, exc)
         return Trading212Broker(demo=demo, owner=owner)
     raise ValueError(f"Unknown BROKER_BACKEND={backend!r}")
-
-
-def _resolve_pending_orders_all_bots() -> None:
-    """Resolve pending IBKR orders for all bots before the daily run.
-
-    Groups bots by IBKR port (so we only connect once per Gateway) and calls
-    ``agents.reconciliation.resolve_pending_orders()``.  Failures are logged
-    but never block the main run.
-    """
-    from agents.reconciliation import resolve_pending_orders, import_manual_positions, cancel_orphan_orders
-
-    try:
-        with get_session() as s:
-            enabled_bots = s.query(Bot).filter(Bot.enabled == 1).all()
-            bot_ids = [b.id for b in enabled_bots]
-    except Exception as exc:
-        log.warning("_resolve_pending_orders: DB error fetching bots: %s", exc)
-        return
-
-    # Collect unique ports across all enabled bots
-    bot_cfgs = {b["id"]: b for b in CONFIG.strategies.get("bots", [])}
-    port_to_bots: dict[int, list[int]] = {}
-    for bot_id in bot_ids:
-        cfg = bot_cfgs.get(bot_id, {})
-        # Use paper port by default (all bots currently paper).
-        port = cfg.get("ibkr_port_paper") or cfg.get("ibkr_port")
-        if port is None:
-            continue
-        port = int(port)
-        port_to_bots.setdefault(port, []).append(bot_id)
-
-    for port, ids in port_to_bots.items():
-        primary = ids[0] if ids else None
-
-        # 0. Cancel orphan IBKR orders (placed by crashed runs, not in DB)
-        try:
-            cancelled = cancel_orphan_orders(ids, port)
-            if cancelled:
-                log.info(
-                    "_resolve_pending_orders: cancelled %d orphan order(s) on port %d",
-                    cancelled, port,
-                )
-        except Exception as exc:
-            log.warning(
-                "_resolve_pending_orders: cancel_orphan port=%d failed: %s", port, exc
-            )
-
-        # 1. Resolve pending DB orders against actual IBKR fills
-        try:
-            resolved = resolve_pending_orders(ids, port)
-            if resolved:
-                log.info(
-                    "_resolve_pending_orders: resolved %d pending order(s) on port %d",
-                    resolved, port,
-                )
-        except Exception as exc:
-            log.warning(
-                "_resolve_pending_orders: port=%d failed: %s", port, exc
-            )
-
-        # 2. Import manual positions from IBKR that are not in SQLite
-        try:
-            imported = import_manual_positions(ids, port, primary_bot_id=primary)
-            if imported:
-                log.info(
-                    "_resolve_pending_orders: imported %d manual position(s) on port %d",
-                    imported, port,
-                )
-        except Exception as exc:
-            log.warning(
-                "_resolve_pending_orders: import_manual port=%d failed: %s", port, exc
-            )
 
 
 def _sync_t212_initial_capital(today: date) -> None:
@@ -706,8 +615,9 @@ def run_once(
 ) -> list[executor.ExecutionReport]:
     """Run one full cycle for every enabled bot.
 
-    Each bot gets its own broker connection (different IBKR Gateway port per
-    account). Any per-bot exception is logged and does NOT abort other bots.
+    Each bot gets its own broker connection (each owner has their own T212
+    credentials).  Any per-bot exception is logged and does NOT abort other
+    bots.
 
     ``skip_bot_ids`` — bot IDs to skip even if enabled (used by --auto to
     avoid re-running bots that already completed today).
@@ -716,9 +626,7 @@ def run_once(
     validate_run_dates(today, as_of)
 
     # ── Pre-run: resolve any pending orders from previous sessions ─────────────
-    if CONFIG.broker_backend == "ibkr":
-        _resolve_pending_orders_all_bots()
-    elif CONFIG.broker_backend == "t212":
+    if CONFIG.broker_backend == "t212":
         _resolve_t212_pending_orders()
         # Log position reconciliation after pending orders are resolved.
         # Uses the enabled paper bots as the reference set.

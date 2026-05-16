@@ -152,7 +152,7 @@ class MeanReversionStrategy(Strategy):
                 continue
 
             target_value = equity * per_pos_pct
-            qty = round(target_value / price, 4)  # fractional shares supported by IBKR
+            qty = round(target_value / price, 4)  # fractional shares supported by T212
             if qty <= 0:
                 continue
 

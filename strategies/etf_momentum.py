@@ -2,7 +2,7 @@
 
 Rules (from PROJECT_PLAN.md):
 
-* Universe: UCITS ETFs (see watchlists.yaml `etfs_ucits`; expand after IBKR contract checks).
+* Universe: UCITS ETFs (see watchlists.yaml `etfs_ucits`).
 * Signal: rank by total return over `lookback_days` (63 = 3 trading months).
 * Hold: top 3 equal-weighted (~33% each).
 * Trend filter: if ALL top-3 have negative return, go 100% cash.
@@ -115,7 +115,7 @@ class EtfMomentumStrategy(Strategy):
             if delta_value <= 0:
                 # Slightly over-weight is fine; we don't trim unless we'd exit.
                 continue
-            qty = round(delta_value / price, 4)  # fractional shares supported by IBKR
+            qty = round(delta_value / price, 4)  # fractional shares supported by T212
             if qty <= 0:
                 continue
             orders.append(
