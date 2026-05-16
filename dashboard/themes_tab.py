@@ -37,9 +37,7 @@ _POTENTIAL_LABELS  = {1: "Marginal", 2: "Moderat", 3: "Bo", 4: "Molt bo", 5: "Ex
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+from dashboard._helpers import _md, _utcnow  # noqa: E402
 
 
 def _fmt_date(dt: datetime | None) -> str:
@@ -163,7 +161,7 @@ def _render_pending_proposals(proposals: list[Theme], *, is_admin: bool = False)
             )
 
             # Narrative — the agent formats this with bold Importància/Potencial sections
-            st.markdown(t.narrative_text)
+            st.markdown(_md(t.narrative_text))
 
             with st.expander("📋 Candidats + invalidadors"):
                 st.markdown(f"**Candidats ({len(tickers)}):** {', '.join(tickers)}")
@@ -238,8 +236,8 @@ def _render_review_notes(notes: list[ThemeReviewNote], themes_by_id: dict[int, T
                         _dismiss_note(n.id)
                         st.rerun()
 
-            st.markdown(f"**Observació:** {n.observation}")
-            st.markdown(f"**Recomanació:** {n.recommendation}")
+            st.markdown(f"**Observació:** {_md(n.observation)}")
+            st.markdown(f"**Recomanació:** {_md(n.recommendation)}")
             st.caption(
                 f"Severitat: {n.severity.upper()} · "
                 f"Creat el {_fmt_date(n.created_at)}"
@@ -283,7 +281,7 @@ def _render_active_themes(themes: list[Theme], *, is_admin: bool = False) -> Non
                     st.info(f"'{t.name}' arxivat.")
                     st.rerun()
 
-            st.markdown(t.narrative_text)
+            st.markdown(_md(t.narrative_text))
 
             # Candidate tickers with linked thesis summaries
             st.markdown(f"**Candidats ({len(tickers)}):** `{'` `'.join(tickers)}`")
@@ -304,13 +302,13 @@ def _render_active_themes(themes: list[Theme], *, is_admin: bool = False) -> Non
                         else f"{emoji} **{thesis.ticker}** {conv}  — {thesis.thesis_text}"
                     ):
                         if thesis.positioning_vs_theme:
-                            st.markdown(f"**Posicionament vs tema:** {thesis.positioning_vs_theme}")
+                            st.markdown(f"**Posicionament vs tema:** {_md(thesis.positioning_vs_theme)}")
                         if thesis.execution_evidence:
-                            st.markdown(f"**Evidència d'execució:** {thesis.execution_evidence}")
+                            st.markdown(f"**Evidència d'execució:** {_md(thesis.execution_evidence)}")
                         if thesis.valuation_assessment:
-                            st.markdown(f"**Valoració:** {thesis.valuation_assessment}")
-                        st.markdown(f"**🐂 Bull case:** {thesis.bull_case}")
-                        st.markdown(f"**🐻 Bear case:** {thesis.bear_case}")
+                            st.markdown(f"**Valoració:** {_md(thesis.valuation_assessment)}")
+                        st.markdown(f"**🐂 Bull case:** {_md(thesis.bull_case)}")
+                        st.markdown(f"**🐻 Bear case:** {_md(thesis.bear_case)}")
                         if thesis.invalidates_if:
                             st.markdown("**🚨 Invalida si:**")
                             conds = (
@@ -368,7 +366,7 @@ def _render_archived_themes(themes: list[Theme]) -> None:
                 f"**{t.name}** — Arxivat {_fmt_date(t.archived_at)} · "
                 f"Imp {t.importance}/5 · Pot {t.potential}/5"
             )
-            st.caption(t.narrative_text[:200] + ("..." if len(t.narrative_text or "") > 200 else ""))
+            st.caption(_md(t.narrative_text[:200] + ("..." if len(t.narrative_text or "") > 200 else "")))
             st.divider()
 
 

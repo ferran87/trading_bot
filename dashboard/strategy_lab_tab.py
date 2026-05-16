@@ -18,6 +18,8 @@ import streamlit as st
 from core.config import CONFIG, PROJECT_ROOT
 from core.db import RuleChangeLog, RuleProposal, SimulatedClosedPosition, get_session
 
+from dashboard._helpers import _md, _utcnow
+
 log = logging.getLogger(__name__)
 
 _STRATEGY_LABELS: dict[str, str] = {
@@ -122,7 +124,7 @@ def _approve(proposal_id: int) -> None:
             new_value=proposal.proposed_value,
         ))
         proposal.status     = "approved"
-        proposal.decided_at = datetime.now(timezone.utc)
+        proposal.decided_at = _utcnow()
         proposal.decided_by = "ferran"
         s.commit()
 
@@ -139,7 +141,7 @@ def _reject(proposal_id: int) -> None:
             st.warning("Proposta ja resolta o no existeix.")
             return
         proposal.status     = "rejected"
-        proposal.decided_at = datetime.now(timezone.utc)
+        proposal.decided_at = _utcnow()
         proposal.decided_by = "ferran"
         s.commit()
     st.info("❌ Rebutjada")
@@ -318,7 +320,7 @@ def _render_proposal_card(row: pd.Series, *, is_admin: bool = False) -> None:
 
         # Rationale (Claude's Catalan reasoning)
         st.markdown("##### 💭 Per què (raonament de l'analista)")
-        st.markdown(f"> {row['rationale']}")
+        st.markdown(f"> {_md(row['rationale'])}")
 
         st.caption(f"Proposta #{row['id']} — creada {row['created_at']:%Y-%m-%d %H:%M}")
 

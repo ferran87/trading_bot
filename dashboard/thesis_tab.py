@@ -48,65 +48,8 @@ _STATUS_EMOJI = {
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
-
-_HEX = frozenset("0123456789abcdefABCDEF")
-
-
-def _decode_unicode_escapes(text: str) -> str:
-    """Convert literal \\uXXXX sequences in text to real Unicode characters.
-
-    Claude sometimes emits Catalan accented characters as raw JSON unicode
-    escapes (e.g. the 6-character string ``\\u00e9`` instead of ``é``).
-    When the JSON-parsed string still literally contains these sequences they
-    show verbatim.  We scan character-by-character and replace each valid
-    ``\\uXXXX`` with the corresponding character.
-    """
-    if "\\" not in text:
-        return text  # fast path — nothing to do
-    out: list[str] = []
-    i = 0
-    n = len(text)
-    while i < n:
-        if (
-            text[i] == "\\"
-            and i + 5 < n
-            and text[i + 1] == "u"
-            and all(c in _HEX for c in text[i + 2 : i + 6])
-        ):
-            out.append(chr(int(text[i + 2 : i + 6], 16)))
-            i += 6
-        else:
-            out.append(text[i])
-            i += 1
-    return "".join(out)
-
-
-def _md(text: str | None) -> str:
-    """Sanitise agent-generated text for safe Streamlit markdown rendering.
-
-    Two problems this fixes:
-
-    1. **Dollar-sign / LaTeX** — Streamlit treats ``$...$`` as inline LaTeX and
-       ``$$...$$`` as block LaTeX.  Any financial figure such as ``$8.55 EPS``
-       or ``$80-83B guidance`` breaks into garbled math output.  We escape every
-       ``$`` as ``\\$`` so Streamlit renders it as a literal dollar sign.
-
-    2. **Literal \\uXXXX sequences** — Claude sometimes emits accented Catalan
-       characters as raw JSON unicode escapes (e.g. ``\\u00e9`` instead of ``é``).
-       When the JSON-parsed string literally contains these six-character sequences,
-       they show up verbatim in the UI.  We decode them back to real Unicode.
-    """
-    if not text:
-        return text or ""
-    # 1. Decode literal \uXXXX escape sequences to actual Unicode characters
-    text = _decode_unicode_escapes(text)
-    # 2. Escape $ so Streamlit doesn't render it as a LaTeX math delimiter
-    text = text.replace("$", r"\$")
-    return text
-
-
-def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+# Shared with themes_tab + strategy_lab_tab — see dashboard/_helpers.py.
+from dashboard._helpers import _md, _utcnow  # noqa: E402,F401
 
 
 def _decide_action(action_id: int, decision: str, decided_by: str = "user") -> None:
