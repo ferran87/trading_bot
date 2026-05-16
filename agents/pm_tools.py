@@ -707,6 +707,186 @@ def _ensure_edgar_identity() -> None:
         log.warning("edgartools not installed; SEC EDGAR access disabled")
 
 
+# ── Phase 6 — deterministic peer comparison ───────────────────────────────────
+
+_PEER_ROW_CACHE: dict[str, dict] = {}      # ticker -> row dict (single session)
+_UNIVERSE_INDUSTRY_CACHE: dict[str, str] = {}  # ticker -> yfinance industry
+
+
+def _peer_row(ticker: str) -> dict:
+    """Return a compact per-peer dict with the metrics used for comparison.
+
+    Cached per ticker for the session — peer scans cluster the same tickers
+    across consecutive theses, so we avoid re-fetching yfinance.
+
+    Returns ``{}`` (not None) when the ticker can't be resolved, so the caller
+    can simply skip it without special-casing None.
+    """
+    if ticker in _PEER_ROW_CACHE:
+        return _PEER_ROW_CACHE[ticker]
+    try:
+        import yfinance as yf
+        info = yf.Ticker(ticker).info or {}
+    except Exception:
+        info = {}
+    if not info or not info.get("currentPrice"):
+        _PEER_ROW_CACHE[ticker] = {}
+        return {}
+
+    from agents.pm_validators import compute_peg_safely
+    trading_ccy = info.get("currency") or "USD"
+    financial_ccy = info.get("financialCurrency") or trading_ccy
+    currency_mismatch = trading_ccy.upper() != financial_ccy.upper()
+
+    market_cap     = info.get("marketCap")
+    total_revenue  = info.get("totalRevenue")
+    current_price  = info.get("currentPrice") or info.get("regularMarketPrice")
+    forward_eps    = info.get("forwardEps")
+    forward_pe_r   = info.get("forwardPE")
+    derived_fpe    = (current_price / forward_eps) if (current_price and forward_eps) else None
+    ps_reported    = info.get("priceToSalesTrailing12Months")
+    ps_derived     = (market_cap / total_revenue) if (market_cap and total_revenue and not currency_mismatch) else None
+
+    # Authoritative: prefer derived when reported disagrees by >30%
+    if forward_pe_r and derived_fpe and abs(forward_pe_r - derived_fpe) / max(derived_fpe, 0.01) > 0.30:
+        fpe_auth = derived_fpe
+    else:
+        fpe_auth = forward_pe_r or derived_fpe
+    if ps_reported and ps_derived and abs(ps_reported - ps_derived) / max(ps_derived, 0.01) > 0.30:
+        ps_auth = ps_derived
+    else:
+        ps_auth = ps_reported or ps_derived
+
+    earnings_growth_d = info.get("earningsGrowth")
+    peg = compute_peg_safely(fpe_auth, earnings_growth_d)
+    roe_d = info.get("returnOnEquity")
+    nm_d  = info.get("profitMargins")
+    gm_d  = info.get("grossMargins")
+
+    def _entry(val, disp):
+        return {"value": round(float(val), 4), "display": disp} if val is not None else None
+
+    row = {
+        "ticker": ticker,
+        "industry": info.get("industry"),
+        "market_cap":   _entry(market_cap / 1e9 if market_cap else None,
+                                _money_display(market_cap / 1e9 if market_cap else None, trading_ccy)),
+        "forward_pe":   _entry(fpe_auth, f"{fpe_auth:.1f}x" if fpe_auth else None),
+        "peg":          _entry(peg, f"{peg:.2f}" if peg else None),
+        "p_s":          _entry(ps_auth, f"{ps_auth:.2f}" if ps_auth else None),
+        "gross_margin": _entry(gm_d * 100 if gm_d is not None else None,
+                                f"{gm_d*100:.1f}%" if gm_d is not None else None),
+        "net_margin":   _entry(nm_d * 100 if nm_d is not None else None,
+                                f"{nm_d*100:.1f}%" if nm_d is not None else None),
+        "roe":          _entry(roe_d * 100 if roe_d is not None else None,
+                                f"{roe_d*100:.0f}%" if roe_d is not None else None),
+    }
+    _PEER_ROW_CACHE[ticker] = row
+    _UNIVERSE_INDUSTRY_CACHE[ticker] = info.get("industry", "")
+    return row
+
+
+def _universe_ticker_industry(ticker: str) -> str:
+    """Return the yfinance industry for a universe ticker.  Cached.
+
+    Used to pick peers: those sharing the same industry as the target.
+    """
+    if ticker in _UNIVERSE_INDUSTRY_CACHE:
+        return _UNIVERSE_INDUSTRY_CACHE[ticker]
+    try:
+        import yfinance as yf
+        ind = yf.Ticker(ticker).info.get("industry", "") or ""
+    except Exception:
+        ind = ""
+    _UNIVERSE_INDUSTRY_CACHE[ticker] = ind
+    return ind
+
+
+def get_peer_metrics(ticker: str, n: int = 4) -> str:
+    """Deterministic peer comparison for a ticker.
+
+    The bot does NOT choose its own comparables.  Peer set = the ticker
+    itself + up to (n-1) other universe tickers sharing the same yfinance
+    ``industry`` (or, when industry is missing, the same ``sector`` tag
+    from ``ai_thesis_universe.yaml``), ranked by market cap descending.
+
+    Returns JSON with the same metric shape as valuation_snapshot fields
+    (``{value, display}``) so the bot can quote peer numbers verbatim.
+
+    The bot is required to call this after ``get_fundamentals`` and before
+    ``submit_thesis``.  Any peer comparison in ``positioning_vs_theme``
+    must reference one of these peers and one of these display strings.
+    """
+    from datetime import date
+
+    target_row = _peer_row(ticker)
+    if not target_row:
+        return json.dumps({
+            "ticker": ticker, "as_of": str(date.today()),
+            "industry": None, "peers": [],
+            "_error": f"Could not resolve {ticker!r} via yfinance.",
+        })
+
+    target_industry = target_row.get("industry") or ""
+
+    # Build candidate peer set from the curated universe (same industry, or
+    # same sector tag as a fallback when industry isn't useful).
+    universe = json.loads(get_universe_tickers())
+    target_entry = next((u for u in universe if u["ticker"] == ticker), None)
+    target_sector = (target_entry or {}).get("sector", "")
+
+    candidates: list[str] = []
+    for u in universe:
+        t = u["ticker"]
+        if t == ticker:
+            continue
+        if target_industry and _universe_ticker_industry(t) == target_industry:
+            candidates.append(t)
+        elif not target_industry and target_sector and u.get("sector") == target_sector:
+            candidates.append(t)
+
+    # Score by market_cap descending; resolve each candidate's row to get mc
+    scored: list[tuple[float, str]] = []
+    for t in candidates:
+        row = _peer_row(t)
+        mc = (row.get("market_cap") or {}).get("value", 0.0)
+        if row:
+            scored.append((mc, t))
+    scored.sort(reverse=True)
+    chosen = [t for _, t in scored[: n - 1]]
+
+    peers = [target_row]
+    for t in chosen:
+        peers.append(_peer_row(t))
+
+    return json.dumps({
+        "ticker": ticker,
+        "as_of": str(date.today()),
+        "industry": target_industry or None,
+        "peers": peers,
+        "guidance": (
+            "Cite peer ratios using the 'display' strings.  The submit_thesis "
+            "validator rejects any numeric token not in the union of this peer "
+            "table and the target's valuation_snapshot."
+        ),
+    })
+
+
+def _peer_snapshot_display_strings(peer_snapshot: dict | None) -> set[str]:
+    """Return the set of 'display' strings across all peer rows."""
+    if not peer_snapshot:
+        return set()
+    out: set[str] = set()
+    for peer in peer_snapshot.get("peers", []):
+        for key, value in peer.items():
+            if isinstance(value, dict) and isinstance(value.get("display"), str):
+                out.add(value["display"])
+        # ticker symbols themselves can appear in narrative legitimately
+        if peer.get("ticker"):
+            out.add(peer["ticker"])
+    return out
+
+
 def get_recent_8k_filings(ticker: str, days: int = 90, limit: int = 5) -> str:
     """Return recent SEC 8-K filings for a US-listed ticker.
 
@@ -1679,6 +1859,34 @@ TOOL_DEFINITIONS: list[dict] = [
         },
     },
     {
+        "name": "get_peer_metrics",
+        "description": (
+            "Returns a deterministic peer comparison for a ticker: the ticker "
+            "itself + up to (n-1) other tickers from the universe sharing the "
+            "same yfinance industry, ranked by market cap.  For each peer, "
+            "returns market_cap, forward_pe (authoritative), peg, p_s "
+            "(authoritative), gross_margin, net_margin, roe — each as a "
+            "{value, display} dict with consistent units.  YOU MUST CALL THIS "
+            "after get_fundamentals(ticker) and before submit_thesis: the "
+            "submit_thesis validator rejects any numeric token in your "
+            "narrative that isn't in either snapshot.  You CANNOT pick your "
+            "own comparables (those choices have historically been cherry-"
+            "picked to make the target look cheap)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string", "description": "Stock ticker"},
+                "n": {
+                    "type": "integer",
+                    "description": "Total peers including the target (default 4)",
+                    "default": 4,
+                },
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
         "name": "get_recent_8k_filings",
         "description": (
             "Returns recent SEC 8-K filings for a US-listed ticker (US ONLY — "
@@ -1914,6 +2122,8 @@ def _dispatch_inner(tool_name: str, tool_input: dict) -> str:
         return get_market_context_today()
     if tool_name == "get_fundamentals":
         return get_fundamentals(tool_input["ticker"])
+    if tool_name == "get_peer_metrics":
+        return get_peer_metrics(tool_input["ticker"], tool_input.get("n", 4))
     if tool_name == "get_analyst_targets":
         return get_analyst_targets(tool_input["ticker"])
     if tool_name == "get_recent_earnings_history":
