@@ -49,6 +49,62 @@ _STATUS_EMOJI = {
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
+_HEX = frozenset("0123456789abcdefABCDEF")
+
+
+def _decode_unicode_escapes(text: str) -> str:
+    """Convert literal \\uXXXX sequences in text to real Unicode characters.
+
+    Claude sometimes emits Catalan accented characters as raw JSON unicode
+    escapes (e.g. the 6-character string ``\\u00e9`` instead of ``é``).
+    When the JSON-parsed string still literally contains these sequences they
+    show verbatim.  We scan character-by-character and replace each valid
+    ``\\uXXXX`` with the corresponding character.
+    """
+    if "\\" not in text:
+        return text  # fast path — nothing to do
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    while i < n:
+        if (
+            text[i] == "\\"
+            and i + 5 < n
+            and text[i + 1] == "u"
+            and all(c in _HEX for c in text[i + 2 : i + 6])
+        ):
+            out.append(chr(int(text[i + 2 : i + 6], 16)))
+            i += 6
+        else:
+            out.append(text[i])
+            i += 1
+    return "".join(out)
+
+
+def _md(text: str | None) -> str:
+    """Sanitise agent-generated text for safe Streamlit markdown rendering.
+
+    Two problems this fixes:
+
+    1. **Dollar-sign / LaTeX** — Streamlit treats ``$...$`` as inline LaTeX and
+       ``$$...$$`` as block LaTeX.  Any financial figure such as ``$8.55 EPS``
+       or ``$80-83B guidance`` breaks into garbled math output.  We escape every
+       ``$`` as ``\\$`` so Streamlit renders it as a literal dollar sign.
+
+    2. **Literal \\uXXXX sequences** — Claude sometimes emits accented Catalan
+       characters as raw JSON unicode escapes (e.g. ``\\u00e9`` instead of ``é``).
+       When the JSON-parsed string literally contains these six-character sequences,
+       they show up verbatim in the UI.  We decode them back to real Unicode.
+    """
+    if not text:
+        return text or ""
+    # 1. Decode literal \uXXXX escape sequences to actual Unicode characters
+    text = _decode_unicode_escapes(text)
+    # 2. Escape $ so Streamlit doesn't render it as a LaTeX math delimiter
+    text = text.replace("$", r"\$")
+    return text
+
+
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -200,7 +256,7 @@ def _render_scorecard(thesis, theme_name_map: dict[int, str]) -> None:
         # Criterion 2 — Unique competitive positioning
         if thesis.positioning_vs_theme:
             st.markdown("**2. Posicionament competitiu únic**")
-            st.markdown(thesis.positioning_vs_theme)
+            st.markdown(_md(thesis.positioning_vs_theme))
         else:
             st.warning("**2. Posicionament:** No avaluat")
 
@@ -210,13 +266,13 @@ def _render_scorecard(thesis, theme_name_map: dict[int, str]) -> None:
         with col_exec:
             st.caption("3a. Execució (8-K / earnings)")
             if thesis.execution_evidence:
-                st.success(thesis.execution_evidence)
+                st.success(_md(thesis.execution_evidence))
             else:
                 st.warning("No avaluat")
         with col_val:
             st.caption("3b. Preu (P/E, PEG, P/S)")
             if thesis.valuation_assessment:
-                st.success(thesis.valuation_assessment)
+                st.success(_md(thesis.valuation_assessment))
             else:
                 st.warning("No avaluat")
 
@@ -236,7 +292,7 @@ def _render_scorecard(thesis, theme_name_map: dict[int, str]) -> None:
                     "si el bot els va tenir en compte o els va ignorar."
                 )
                 for w in warnings_list:
-                    st.warning(w)
+                    st.warning(_md(w))
 
         # Phase 4c — Concentration acknowledgement (if applicable)
         if conc_count >= 3 and (thesis.conviction or 0) >= 4:
@@ -379,30 +435,30 @@ def render_thesis_tab(*, is_admin: bool = False) -> None:
                             st.rerun()
 
                 # Thesis narrative
-                st.markdown(f"**Tesi:** {thesis.thesis_text}")
+                st.markdown(f"**Tesi:** {_md(thesis.thesis_text)}")
 
                 # Phase 4b — 3-criteria scorecard
                 _render_scorecard(thesis, theme_name_map)
 
                 with st.expander("Veure cas bull/bear + invalidació"):
-                    st.markdown(f"**🐂 Bull case:** {thesis.bull_case}")
-                    st.markdown(f"**🐻 Bear case:** {thesis.bear_case}")
+                    st.markdown(f"**🐂 Bull case:** {_md(thesis.bull_case)}")
+                    st.markdown(f"**🐻 Bear case:** {_md(thesis.bear_case)}")
                     if thesis.invalidates_if:
                         st.markdown("**🚨 Invalida si:**")
                         for cond in thesis.invalidates_if:
-                            st.markdown(f"  - {cond}")
+                            st.markdown(f"  - {_md(cond)}")
                     if thesis.catalysts:
                         st.markdown("**⚡ Catalitzadors:**")
                         for cat in thesis.catalysts:
                             st.markdown(
-                                f"  - **{cat.get('event', '')}** "
+                                f"  - **{_md(cat.get('event', ''))}** "
                                 f"({cat.get('expected_date', '?')}): "
-                                f"{cat.get('expected_outcome', '')}"
+                                f"{_md(cat.get('expected_outcome', ''))}"
                             )
 
                 # Exit rationale (only for exit actions)
                 if action.action_type == "exit":
-                    st.warning(f"💬 Raó de sortida: {action.rationale}")
+                    st.warning(f"💬 Raó de sortida: {_md(action.rationale)}")
 
                 st.caption(
                     f"Proposat: {action.proposed_at.strftime('%d/%m/%Y %H:%M')} UTC  |  "
@@ -449,25 +505,25 @@ def render_thesis_tab(*, is_admin: bool = False) -> None:
                     f"⏳ Esperant senyal RSI/SMA50 &nbsp;&nbsp; "
                     f"Caduca en {expires_in} dies"
                 )
-                st.markdown(f"**Tesi:** {thesis.thesis_text}")
+                st.markdown(f"**Tesi:** {_md(thesis.thesis_text)}")
 
                 # Phase 4b — 3-criteria scorecard
                 _render_scorecard(thesis, theme_name_map)
 
                 with st.expander("Veure cas bull/bear + invalidació + catalitzadors"):
-                    st.markdown(f"**🐂 Bull case:** {thesis.bull_case}")
-                    st.markdown(f"**🐻 Bear case:** {thesis.bear_case}")
+                    st.markdown(f"**🐂 Bull case:** {_md(thesis.bull_case)}")
+                    st.markdown(f"**🐻 Bear case:** {_md(thesis.bear_case)}")
                     if thesis.invalidates_if:
                         st.markdown("**🚨 Invalida si:**")
                         for cond in thesis.invalidates_if:
-                            st.markdown(f"  - {cond}")
+                            st.markdown(f"  - {_md(cond)}")
                     if thesis.catalysts:
                         st.markdown("**⚡ Catalitzadors:**")
                         for cat in thesis.catalysts:
                             st.markdown(
-                                f"  - **{cat.get('event', '')}** "
+                                f"  - **{_md(cat.get('event', ''))}** "
                                 f"({cat.get('expected_date', '?')}): "
-                                f"{cat.get('expected_outcome', '')}"
+                                f"{_md(cat.get('expected_outcome', ''))}"
                             )
 
                 st.caption(
@@ -533,10 +589,10 @@ def render_thesis_tab(*, is_admin: bool = False) -> None:
                 f"{verdict_emoji} **{thesis.ticker}** — conv {thesis.conviction}/5 "
                 f"| {days_active}d activa{stale_flag}{weakening_bar}"
             ):
-                st.markdown(f"**Tesi:** {thesis.thesis_text}")
+                st.markdown(f"**Tesi:** {_md(thesis.thesis_text)}")
 
-                st.markdown(f"**🐂 Bull case:** {thesis.bull_case}")
-                st.markdown(f"**🐻 Bear case:** {thesis.bear_case}")
+                st.markdown(f"**🐂 Bull case:** {_md(thesis.bull_case)}")
+                st.markdown(f"**🐻 Bear case:** {_md(thesis.bear_case)}")
 
                 if thesis.invalidates_if:
                     st.markdown("**🚨 Invalida si:**")
@@ -561,9 +617,9 @@ def render_thesis_tab(*, is_admin: bool = False) -> None:
                         f"**Última revisió** ({last_review.reviewed_at.strftime('%d/%m/%Y')}): "
                         f"{verdict_emoji} {verdict}"
                     )
-                    st.caption(last_review.new_info_summary)
+                    st.caption(_md(last_review.new_info_summary))
                     if last_review.notes:
-                        st.caption(f"Notes: {last_review.notes}")
+                        st.caption(f"Notes: {_md(last_review.notes)}")
 
                 st.caption(
                     f"Horitzó: {thesis.horizon_months} mesos | "
