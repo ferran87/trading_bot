@@ -67,6 +67,19 @@ LOG_DIR = DATA_DIR / "logs"
 
 load_dotenv(PROJECT_ROOT / ".env", override=True)
 
+# On Streamlit Cloud, secrets are stored in st.secrets (not in .env).
+# Mirror them into os.environ so that every os.environ.get() call in the
+# codebase (broker credentials, database URLs, API keys) works identically
+# whether the app is running locally or on Streamlit Cloud.
+# Only flat string secrets are mirrored; nested TOML tables are skipped.
+try:
+    import streamlit as st  # noqa: PLC0415  (local import to avoid hard dep)
+    for _k, _v in st.secrets.items():
+        if isinstance(_v, str):
+            os.environ.setdefault(_k, _v)
+except Exception:
+    pass  # Not running under Streamlit, or st.secrets unavailable — fine.
+
 
 def _load_yaml(name: str) -> dict[str, Any]:
     path = CONFIG_DIR / name
