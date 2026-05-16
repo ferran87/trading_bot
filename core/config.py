@@ -37,14 +37,14 @@ BROKER_BACKEND              mock | t212  (default: mock)
 DATABASE_URL                Supabase PostgreSQL — overrides local SQLite
 DATABASE_URL_T212           PostgreSQL for T212 backend
 
-T212_API_KEY_PAPER          T212 demo API key
-T212_API_SECRET_PAPER       T212 demo API secret
-T212_API_KEY_LIVE           T212 live API key
-T212_API_SECRET_LIVE        T212 live API secret
-T212_API_KEY_PAPER_<OWNER>  Per-owner demo key (e.g. T212_API_KEY_PAPER_ANTONIO)
+T212_API_KEY_PAPER_<OWNER>  Per-owner demo key — checked FIRST (e.g. T212_API_KEY_PAPER_FERRAN)
 T212_API_SECRET_PAPER_<OWNER>
-T212_API_KEY_LIVE_<OWNER>   Per-owner live key
+T212_API_KEY_LIVE_<OWNER>   Per-owner live key (e.g. T212_API_KEY_LIVE_FERRAN)
 T212_API_SECRET_LIVE_<OWNER>
+T212_API_KEY_PAPER          Generic demo key — fallback when no owner-scoped key exists
+T212_API_SECRET_PAPER       Generic demo secret — fallback
+T212_API_KEY_LIVE           Generic live key — fallback
+T212_API_SECRET_LIVE        Generic live secret — fallback
 
 ANTHROPIC_API_KEY           Claude API for the AI agents  (optional)
 OPENAI_API_KEY              OpenAI API (legacy / fallback)  (optional)

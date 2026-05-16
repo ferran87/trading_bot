@@ -40,7 +40,6 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import os
 import sys
 import time
 from pathlib import Path
@@ -71,18 +70,11 @@ LIVE_URL = "https://live.trading212.com/api/v0"
 # ---------------------------------------------------------------------------
 
 def _credentials(demo: bool = True) -> tuple[str, str]:
-    suffix = "PAPER" if demo else "LIVE"
-    key = os.environ.get(f"T212_API_KEY_{suffix}", "").strip() or os.environ.get("T212_API_KEY", "").strip()
-    secret = os.environ.get(f"T212_API_SECRET_{suffix}", "").strip() or os.environ.get("T212_API_SECRET", "").strip()
-    if not key:
-        raise SystemExit(f"ERROR: T212_API_KEY_{suffix} not set in .env")
-    if not secret:
-        raise SystemExit(
-            f"ERROR: T212_API_SECRET_{suffix} not set in .env\n"
-            "The secret is only shown once at key creation time. Delete the key in T212, "
-            "generate a new one, and save both the key AND secret."
-        )
-    return key, secret
+    from core.t212_auth import resolve_t212_credentials
+    try:
+        return resolve_t212_credentials(demo=demo, owner="ferran")
+    except RuntimeError as exc:
+        raise SystemExit(f"ERROR: {exc}") from None
 
 
 def _headers(demo: bool = True) -> dict:

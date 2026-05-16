@@ -1,13 +1,16 @@
 """Quick check of T212 demo account — portfolio, cash, and recent orders."""
-import os, base64, json
-from dotenv import load_dotenv
-load_dotenv(override=True)
-import requests
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-key    = os.environ.get("T212_API_KEY_PAPER", "").strip()
-secret = os.environ.get("T212_API_SECRET_PAPER", "").strip()
-token  = base64.b64encode(f"{key}:{secret}".encode()).decode()
-headers = {"Authorization": f"Basic {token}"}
+from dotenv import load_dotenv
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=True)
+
+import requests
+from core.t212_auth import resolve_t212_credentials, t212_basic_auth_header
+
+key, secret = resolve_t212_credentials(demo=True, owner="ferran")
+headers = {"Authorization": t212_basic_auth_header(key, secret)}
 BASE = "https://demo.trading212.com"
 
 # ── Account summary ───────────────────────────────────────────────────────────
