@@ -574,34 +574,11 @@ def _ibkr_executions(port: int) -> pd.DataFrame:
 def _t212_headers(demo: bool, owner: str | None = None) -> dict | None:
     """Build the Basic-auth header for T212. Returns None if credentials missing.
 
-    Lookup order matches ``core.broker.Trading212Broker._credentials``:
-      1. ``T212_API_KEY_{SUFFIX}_{OWNER}``  — per-owner
-      2. ``T212_API_KEY_{SUFFIX}``          — single-account default
-      3. ``T212_API_KEY``                   — legacy fallback
+    Thin wrapper over :func:`core.t212_auth.t212_headers` kept for backward
+    compatibility with existing call sites in this module and ``app.py``.
     """
-    import base64
-    import os
-    suffix = "PAPER" if demo else "LIVE"
-    owner_suffix = (owner or "").strip().upper() or None
-
-    def _resolve(prefix: str) -> str:
-        candidates: list[str] = []
-        if owner_suffix:
-            candidates.append(f"{prefix}_{suffix}_{owner_suffix}")
-        candidates.append(f"{prefix}_{suffix}")
-        candidates.append(prefix)
-        for name in candidates:
-            v = os.environ.get(name, "").strip()
-            if v:
-                return v
-        return ""
-
-    key    = _resolve("T212_API_KEY")
-    secret = _resolve("T212_API_SECRET")
-    if not key or not secret:
-        return None
-    token = base64.b64encode(f"{key}:{secret}".encode()).decode()
-    return {"Authorization": f"Basic {token}"}
+    from core.t212_auth import t212_headers
+    return t212_headers(demo, owner)
 
 
 @st.cache_data(ttl=300)

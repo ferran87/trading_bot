@@ -578,76 +578,29 @@ class Trading212Broker:
 
     @property
     def _base_url(self) -> str:
-        return (
-            "https://demo.trading212.com/api/v0"
-            if self._demo
-            else "https://live.trading212.com/api/v0"
-        )
+        from core.t212_auth import t212_base_url
+        return t212_base_url(self._demo)
 
     def _credentials(self) -> tuple[str, str]:
-        """Return (api_key, api_secret) for the current environment and owner.
+        """Return ``(api_key, api_secret)`` for this broker's env + owner.
 
-        Lookup order (first non-empty wins):
-          1. ``T212_API_KEY_{SUFFIX}_{OWNER}``  — per-owner credentials
-          2. ``T212_API_KEY_{SUFFIX}``          — single-account default (Ferran)
-          3. ``T212_API_KEY``                   — legacy single-env-var fallback
+        Delegates to :func:`core.t212_auth.resolve_t212_credentials` — see
+        that module for the lookup order and fallback-warning behaviour.
         """
-        suffix = "PAPER" if self._demo else "LIVE"
-        owner_suffix = (self._owner.upper() if self._owner else "")
-
-        def _resolve(prefix: str) -> tuple[str, str]:
-            """Return (value, env_var_name_used) for the first non-empty match."""
-            candidates: list[str] = []
-            if owner_suffix:
-                candidates.append(f"{prefix}_{suffix}_{owner_suffix}")
-            candidates.append(f"{prefix}_{suffix}")
-            candidates.append(prefix)
-            for name in candidates:
-                v = os.environ.get(name, "").strip()
-                if v:
-                    return v, name
-            return "", candidates[0]
-
-        key,    key_var    = _resolve("T212_API_KEY")
-        secret, secret_var = _resolve("T212_API_SECRET")
-
-        # Warn when an owner-specific var was requested but the generic fallback
-        # is being used — this means orders for this owner will silently go to
-        # whatever account the generic key belongs to (typically Ferran's).
-        if owner_suffix and key:
-            expected_key_var = f"T212_API_KEY_{suffix}_{owner_suffix}"
-            if key_var != expected_key_var:
-                log.warning(
-                    "Trading212Broker: owner=%r has no dedicated %s — "
-                    "falling back to %r which may point to a DIFFERENT account. "
-                    "Set %s in .env to suppress this warning.",
-                    self._owner, expected_key_var, key_var, expected_key_var,
-                )
-
-        owner_hint = f" for owner={self._owner!r}" if self._owner else ""
-        if not key:
-            raise RuntimeError(
-                f"T212_API_KEY_{suffix}"
-                + (f"_{owner_suffix}" if owner_suffix else "")
-                + f" not set in .env{owner_hint} -- cannot connect to Trading 212. "
-                "Generate a key from T212 -> Settings -> API (Beta) and save both the key AND secret."
-            )
-        if not secret:
-            raise RuntimeError(
-                f"T212_API_SECRET_{suffix}"
-                + (f"_{owner_suffix}" if owner_suffix else "")
-                + f" not set in .env{owner_hint} -- the secret is shown only once "
-                "at key creation time. Delete the old key, generate a new one, and save both values."
-            )
-        return key, secret
+        from core.t212_auth import resolve_t212_credentials
+        return resolve_t212_credentials(self._demo, self._owner)
 
     def _headers(self) -> dict[str, str]:
-        """Build HTTP Basic Auth header: base64(api_key:api_secret)."""
-        import base64
-        key, secret = self._credentials()
-        token = base64.b64encode(f"{key}:{secret}".encode()).decode()
+        """Build HTTP Basic Auth header: base64(api_key:api_secret).
+
+        Uses :func:`resolve_t212_credentials` directly (not :func:`t212_headers`)
+        because the broker needs the original RuntimeError with the actionable
+        env-var name to bubble up — the dashboard variant swallows it.
+        """
+        from core.t212_auth import resolve_t212_credentials, t212_basic_auth_header
+        key, secret = resolve_t212_credentials(self._demo, self._owner)
         return {
-            "Authorization": f"Basic {token}",
+            "Authorization": t212_basic_auth_header(key, secret),
             "Content-Type": "application/json",
         }
 
