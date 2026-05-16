@@ -149,6 +149,96 @@ def _theme_concentration_count(theme_id: int) -> int:
         return 0
 
 
+def _render_snapshot_tables(thesis) -> None:
+    """Render the Phase 6 numerical signal: valuation_snapshot + peer_snapshot.
+
+    Shown ABOVE the prose (thesis/bull/bear) so the user sees the verified
+    numbers before reading the agent's interpretation.  The validator
+    guarantees every digit-bearing token in the prose comes from these
+    tables, so they are the source of numerical truth — the prose is
+    qualitative interpretation only.
+
+    Legacy theses (created before Phase 6) silently render nothing.
+    """
+    vs = getattr(thesis, "valuation_snapshot", None)
+    ps = getattr(thesis, "peer_snapshot", None)
+    if not vs and not ps:
+        return
+
+    # Valuation snapshot — compact 3-column table
+    if vs:
+        st.markdown("##### 📊 Snapshot de valoració (font autoritativa)")
+        rows = []
+        def _add(label: str, key: str):
+            entry = vs.get(key)
+            if entry and isinstance(entry, dict) and entry.get("display"):
+                rows.append({"Mètrica": label, "Valor": entry["display"]})
+        _add("Preu actual",         "current_price")
+        _add("Market cap",          "market_cap")
+        _add("Revenue TTM",         "revenue_ttm")
+        _add("Forward P/E (auth.)", "forward_pe_authoritative")
+        # Show derived alongside when it differs from reported (warning fired)
+        fpe_rep = vs.get("forward_pe_reported")
+        fpe_der = vs.get("forward_pe_derived")
+        if fpe_rep and fpe_der and abs(fpe_rep.get("value", 0) - fpe_der.get("value", 0)) / max(fpe_der.get("value", 1), 0.01) > 0.30:
+            rows.append({"Mètrica": "  ↳ reported (yfinance)", "Valor": fpe_rep["display"]})
+            rows.append({"Mètrica": "  ↳ derived (preu/EPS)",  "Valor": fpe_der["display"]})
+        peg_entry = vs.get("peg")
+        if peg_entry:
+            rows.append({"Mètrica": "PEG",                 "Valor": peg_entry.get("display", "—")})
+            if peg_entry.get("calc"):
+                rows.append({"Mètrica": "  ↳ càlcul",        "Valor": peg_entry["calc"]})
+        else:
+            rows.append({"Mètrica": "PEG", "Valor": "— (growth N/A, prohibit citar PEG)"})
+        _add("P/S (auth.)",         "p_s_authoritative")
+        _add("Net margin",          "net_margin")
+        _add("Gross margin",        "gross_margin")
+        _add("ROE",                 "roe")
+        if rows:
+            import pandas as pd
+            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+        ccy_t = vs.get("trading_currency", "—")
+        ccy_f = vs.get("financial_currency", ccy_t)
+        if ccy_t != ccy_f:
+            st.caption(
+                f"⚠️ Currency mismatch: price/market_cap en {ccy_t}, "
+                f"revenue en {ccy_f}.  P/S derivada NO disponible per a aquest ticker."
+            )
+
+    # Peer comparison — wider table
+    if ps and ps.get("peers"):
+        industry = ps.get("industry") or "N/A"
+        st.markdown(f"##### 🏟 Peers — indústria: *{industry}*")
+        peer_rows = []
+        for p in ps["peers"]:
+            if not p:
+                continue
+            def _disp(field: str) -> str:
+                e = p.get(field)
+                return e["display"] if (isinstance(e, dict) and e.get("display")) else "—"
+            star = " ★" if p.get("ticker") == thesis.ticker else ""
+            peer_rows.append({
+                "Ticker":   f"{p.get('ticker', '?')}{star}",
+                "Mkt cap":  _disp("market_cap"),
+                "Fwd P/E":  _disp("forward_pe"),
+                "PEG":      _disp("peg"),
+                "P/S":      _disp("p_s"),
+                "Gross %":  _disp("gross_margin"),
+                "Net %":    _disp("net_margin"),
+                "ROE":      _disp("roe"),
+            })
+        if peer_rows:
+            import pandas as pd
+            st.dataframe(pd.DataFrame(peer_rows), use_container_width=True, hide_index=True)
+
+    st.caption(
+        "📋 Aquestes són les xifres autoritatives.  Qualsevol nombre a la "
+        "tesi/bull/bear/scorecard ha de venir d'aquestes taules; el validador "
+        "rebutja qualsevol nombre que no hi sigui."
+    )
+
+
 def _render_scorecard(thesis, theme_name_map: dict[int, str]) -> None:
     """Render the 3-criteria evaluation scorecard for a thesis card.
 
@@ -380,6 +470,8 @@ def render_thesis_tab(*, is_admin: bool = False) -> None:
                 # Thesis narrative
                 st.markdown(f"**Tesi:** {_md(thesis.thesis_text)}")
 
+                # Phase 6 — numerical snapshot tables (source of truth)
+                _render_snapshot_tables(thesis)
                 # Phase 4b — 3-criteria scorecard
                 _render_scorecard(thesis, theme_name_map)
 
@@ -450,6 +542,8 @@ def render_thesis_tab(*, is_admin: bool = False) -> None:
                 )
                 st.markdown(f"**Tesi:** {_md(thesis.thesis_text)}")
 
+                # Phase 6 — numerical snapshot tables (source of truth)
+                _render_snapshot_tables(thesis)
                 # Phase 4b — 3-criteria scorecard
                 _render_scorecard(thesis, theme_name_map)
 
@@ -551,6 +645,8 @@ def render_thesis_tab(*, is_admin: bool = False) -> None:
                             f"{cat.get('expected_outcome', '')}"
                         )
 
+                # Phase 6 — numerical snapshot tables (source of truth)
+                _render_snapshot_tables(thesis)
                 # Phase 4b — 3-criteria scorecard
                 _render_scorecard(thesis, theme_name_map)
 
