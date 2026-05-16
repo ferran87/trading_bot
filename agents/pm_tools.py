@@ -633,6 +633,9 @@ def get_fundamentals(ticker: str) -> str:
         warnings=warnings,
     )
 
+    # Cache the snapshot for the upcoming submit_thesis validator.
+    _LATEST_VALUATION_SNAPSHOT[ticker] = valuation_snapshot
+
     return json.dumps({
         "ticker": ticker,
         "currency": info.get("currency"),
@@ -711,6 +714,13 @@ def _ensure_edgar_identity() -> None:
 
 _PEER_ROW_CACHE: dict[str, dict] = {}      # ticker -> row dict (single session)
 _UNIVERSE_INDUSTRY_CACHE: dict[str, str] = {}  # ticker -> yfinance industry
+
+# Session-level caches of the most recent valuation_snapshot and peer_snapshot
+# for each ticker.  Populated by get_fundamentals + get_peer_metrics.  Used by
+# submit_thesis to build the allowed-displays set for the digit-fabrication
+# check AND to persist the snapshots onto the Thesis row.
+_LATEST_VALUATION_SNAPSHOT: dict[str, dict] = {}
+_LATEST_PEER_SNAPSHOT: dict[str, dict] = {}
 
 
 def _peer_row(ticker: str) -> dict:
@@ -859,7 +869,7 @@ def get_peer_metrics(ticker: str, n: int = 4) -> str:
     for t in chosen:
         peers.append(_peer_row(t))
 
-    return json.dumps({
+    payload = {
         "ticker": ticker,
         "as_of": str(date.today()),
         "industry": target_industry or None,
@@ -869,7 +879,9 @@ def get_peer_metrics(ticker: str, n: int = 4) -> str:
             "validator rejects any numeric token not in the union of this peer "
             "table and the target's valuation_snapshot."
         ),
-    })
+    }
+    _LATEST_PEER_SNAPSHOT[ticker] = payload
+    return json.dumps(payload)
 
 
 def _peer_snapshot_display_strings(peer_snapshot: dict | None) -> set[str]:
@@ -1473,6 +1485,148 @@ def submit_thesis(
                     ),
                 })
 
+    # ── Phase 6 (6a): forbidden soundbites in bull/bear ──────────────────────
+    # Cramer / "the street" / "smart money" etc. are vibes, not signal.
+    from agents.pm_validators import (
+        check_forbidden_soundbites,
+        percentile_rank_in_peers,
+        validate_no_invented_digits,
+    )
+    for field_name, field_text in [
+        ("bull_case", bull_case),
+        ("bear_case", bear_case),
+        ("thesis_text", thesis_text),
+    ]:
+        sb_err = check_forbidden_soundbites(field_text)
+        if sb_err:
+            return json.dumps({
+                "status": "error",
+                "message": f"{field_name} contains a {sb_err} — remove it. "
+                           "Pundit soundbites correlate with the worst theses; "
+                           "evidence must come from data, not opinion.",
+            })
+
+    # ── Phase 6 (6b): digit fabrication check ────────────────────────────────
+    # Every numeric token in the scorecard fields must appear in the
+    # snapshot/peer cache for this ticker.  This requires get_fundamentals
+    # AND get_peer_metrics to have been called BEFORE submit_thesis.
+    valuation_snapshot = _LATEST_VALUATION_SNAPSHOT.get(ticker)
+    peer_snapshot = _LATEST_PEER_SNAPSHOT.get(ticker)
+    if valuation_snapshot is None or peer_snapshot is None:
+        missing = []
+        if valuation_snapshot is None:
+            missing.append("get_fundamentals(ticker)")
+        if peer_snapshot is None:
+            missing.append("get_peer_metrics(ticker)")
+        return json.dumps({
+            "status": "error",
+            "message": (
+                "Required snapshots missing. Call "
+                + " AND ".join(missing)
+                + f" for {ticker!r} BEFORE submit_thesis so the validator can "
+                "check that narrative ratios come from real tool results, not "
+                "from your memory."
+            ),
+        })
+
+    allowed_displays = (
+        _snapshot_display_strings(valuation_snapshot)
+        | _peer_snapshot_display_strings(peer_snapshot)
+    )
+    for field_name, field_text in [
+        ("positioning_vs_theme", positioning_vs_theme),
+        ("execution_evidence",   execution_evidence),
+        ("valuation_assessment", valuation_assessment),
+    ]:
+        if not field_text:
+            continue
+        digit_err = validate_no_invented_digits(field_text, allowed_displays)
+        if digit_err:
+            sample_allowed = sorted(allowed_displays)[:15]
+            return json.dumps({
+                "status": "error",
+                "message": (
+                    f"{field_name}: {digit_err}\n"
+                    f"Allowed displays for {ticker} (sample of {len(allowed_displays)}): "
+                    f"{sample_allowed}\n"
+                    "Quote ratios using the 'display' strings from "
+                    "get_fundamentals.valuation_snapshot or get_peer_metrics.peers, "
+                    "verbatim.  Do NOT compute or restate any ratio in prose."
+                ),
+            })
+
+    # ── Phase 6 (6c): conviction hard caps ───────────────────────────────────
+    # Each cap floors conviction at 3 (waiting) instead of allowing 4-5
+    # (immediate entry).  Bot can still propose higher but the validator
+    # rejects and explains which cap fired.
+    snapshot_warnings = (
+        valuation_snapshot
+        and (fund_json.get("_warnings") if 'fund_json' in dir() else None)
+    ) or fundamentals_warnings
+
+    # Cap A: any unresolved numerical warning present
+    if conviction >= 4 and snapshot_warnings:
+        return json.dumps({
+            "status": "error",
+            "message": (
+                f"_warnings non-empty for {ticker} "
+                f"({len(snapshot_warnings)} item(s): {snapshot_warnings[0][:120]}...). "
+                "Max conviction 3 when warnings are present.  Either resolve them "
+                "in valuation_assessment (cite the derived value, acknowledge the "
+                "currency mismatch, etc.) and use the corrected number, or accept "
+                "conviction 3 (waiting status)."
+            ),
+        })
+
+    # Cap B: ticker priced in upper half of its industry peers
+    peer_rank = percentile_rank_in_peers(
+        peer_snapshot.get("peers", []), "forward_pe", ticker,
+    )
+    if conviction >= 4 and peer_rank > 0.5:
+        return json.dumps({
+            "status": "error",
+            "message": (
+                f"{ticker} forward P/E ranks at {peer_rank*100:.0f}th percentile "
+                "of its industry peers (priced above peer median).  Max "
+                "conviction 3.  Stocks at peer-premium need to clear at the "
+                "technical layer too; if the narrative is strong enough to "
+                "deserve immediate entry it can earn conviction 4 only when "
+                "the multiple is at or below peer median."
+            ),
+        })
+
+    # Cap C: macro-driver saturation across themes
+    if conviction >= 4 and theme_id:
+        from core.db import Theme as _Theme
+        with get_session() as _md_s:
+            theme_row = (
+                _md_s.query(_Theme).filter(_Theme.id == theme_id).first()
+            )
+            md_tag = (theme_row.macro_driver if theme_row else None) or None
+            if md_tag:
+                same_driver_high = (
+                    _md_s.query(Thesis)
+                    .join(_Theme, Thesis.theme_id == _Theme.id)
+                    .filter(
+                        _Theme.macro_driver == md_tag,
+                        Thesis.status == "active",
+                        Thesis.conviction >= 4,
+                    )
+                    .count()
+                )
+                if same_driver_high >= 3:
+                    return json.dumps({
+                        "status": "error",
+                        "message": (
+                            f"Macro driver {md_tag!r} already has {same_driver_high} "
+                            "active conviction-4+ theses across all themes.  Max "
+                            "conviction 3 to prevent the portfolio from becoming "
+                            "a single correlated bet.  If you believe this driver "
+                            "deserves more weight, downgrade one of the existing "
+                            "conviction-4+ theses first."
+                        ),
+                    })
+
     # ── Duplicate check ──────────────────────────────────────────────────────
     with get_session() as s:
         existing = (
@@ -1526,6 +1680,10 @@ def submit_thesis(
             # Phase 4c — sourcing audit trail
             sources=sources if sources else None,
             warnings_at_creation=fundamentals_warnings if fundamentals_warnings else None,
+            # Phase 6 — persist the actual snapshot dicts so the dashboard
+            # renders the true source of numerical truth alongside the prose.
+            valuation_snapshot=valuation_snapshot,
+            peer_snapshot=peer_snapshot,
         )
         s.add(thesis)
         s.flush()
