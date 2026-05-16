@@ -281,6 +281,13 @@ class Theme(Base):
     created_by = Column(String, nullable=False, default="strategist")  # 'strategist' | 'user'
     user_notes = Column(Text, nullable=True)
 
+    # Phase 6 — macro driver tag (e.g. "ai_capex", "glp1", "nuclear_revival",
+    # "cybersecurity") used by the conviction-cap that prevents more than 3
+    # active conviction-4+ theses sharing the same macro driver.  User-set when
+    # approving the theme.  Nullable for backward compat with Phase 4 themes.
+    # DDL: ALTER TABLE themes ADD COLUMN IF NOT EXISTS macro_driver VARCHAR(64);
+    macro_driver = Column(String(64), nullable=True)
+
 
 class ThemeStockProposal(Base):
     """The Analyst agent suggesting a new candidate ticker for an active theme.
@@ -387,6 +394,20 @@ class Thesis(Base):
     #   ALTER TABLE theses ADD COLUMN IF NOT EXISTS warnings_at_creation JSON;
     sources              = Column(JSON, nullable=True)
     warnings_at_creation = Column(JSON, nullable=True)
+
+    # Phase 6 — numerical integrity hard mode.
+    # `valuation_snapshot` is the dict returned by get_fundamentals at
+    # thesis-creation time: pre-computed authoritative ratios + their display
+    # strings.  The dashboard renders it as the primary numerical signal; the
+    # prose fields become qualitative interpretation only.
+    # `peer_snapshot` is the dict from get_peer_metrics: the deterministic
+    # peer comparison for the ticker's industry, with each peer's ratios.
+    # Both nullable for backward compat with Phase 2/4/4b/4c theses.
+    # DDL (run in Supabase SQL Editor — never via pooler):
+    #   ALTER TABLE theses ADD COLUMN IF NOT EXISTS valuation_snapshot JSON;
+    #   ALTER TABLE theses ADD COLUMN IF NOT EXISTS peer_snapshot      JSON;
+    valuation_snapshot   = Column(JSON, nullable=True)
+    peer_snapshot        = Column(JSON, nullable=True)
 
     # Tracking
     realized_pnl_eur = Column(Float, nullable=True)
