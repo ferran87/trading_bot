@@ -268,6 +268,194 @@ def get_market_context_today() -> str:
     return get_market_context(str(date.today()))
 
 
+# ── Phase 6 — valuation_snapshot helpers ────────────────────────────────────────
+
+def _ratio_entry(value: float | None, display: str | None) -> dict | None:
+    """Return ``{"value": v, "display": d}`` or ``None`` when value missing.
+
+    Snapshot fields are kept None (rather than empty dicts) so the bot
+    cannot quote a "display" string that's just a unit suffix with no
+    actual number.
+    """
+    if value is None:
+        return None
+    return {"value": round(float(value), 4), "display": display}
+
+
+_CURRENCY_PREFIX = {
+    "USD": "$",  "EUR": "€",  "GBP": "£",  "JPY": "¥",
+    "TWD": "NT$","CNY": "¥",  "HKD": "HK$","CHF": "CHF ",
+    "CAD": "C$", "AUD": "A$",
+}
+
+
+def _money_display(amount_b: float | None, currency: str) -> str | None:
+    """Format a billions amount with the right currency symbol."""
+    if amount_b is None:
+        return None
+    prefix = _CURRENCY_PREFIX.get(currency.upper(), f"{currency} ")
+    return f"{prefix}{amount_b:.0f}B"
+
+
+def _build_valuation_snapshot(
+    *,
+    ticker: str,
+    current_price: float | None,
+    trading_ccy: str,
+    financial_ccy: str,
+    market_cap: float | None,
+    total_revenue: float | None,
+    forward_eps: float | None,
+    forward_pe_reported: float | None,
+    derived_fpe: float | None,
+    price_to_sales_reported: float | None,
+    price_to_sales_derived: float | None,
+    earnings_growth_decimal: float | None,
+    roe_decimal: float | None,
+    net_margin_decimal: float | None,
+    gross_margin_decimal: float | None,
+    warnings: list[str],
+) -> dict:
+    """Build the structured snapshot the bot is required to cite from.
+
+    The two key ideas:
+      1. Every field has a ``display`` string with consistent units (ROE
+         always as percentage, P/E always with ``x`` suffix, dollar amounts
+         as ``$N.NB``).  The bot quotes ``display`` verbatim — never re-states
+         the value with different precision or different units.
+      2. For ratios where reported and derived can disagree, the snapshot
+         exposes BOTH, plus an ``_authoritative`` field set to the derived
+         value when a warning fired (>30% mismatch) and to the reported
+         value otherwise.  This is the value the bot should cite.
+
+    PEG specifically: only computed when ``earningsGrowth`` is a positive
+    decimal (via :func:`compute_peg_safely`).  When None, the bot is
+    forbidden from claiming a PEG anywhere in the thesis.
+    """
+    from agents.pm_validators import compute_peg_safely
+
+    # Detect whether each cross-check warning fired (drives "_authoritative")
+    fpe_warning = any("Forward P/E cross-check failed" in w for w in warnings)
+    ps_warning = any(
+        ("P/S TTM cross-check failed" in w or "structurally implausible" in w)
+        for w in warnings
+    )
+
+    # Pick authoritative values
+    if fpe_warning and derived_fpe is not None:
+        fpe_auth = derived_fpe
+    else:
+        fpe_auth = forward_pe_reported if forward_pe_reported is not None else derived_fpe
+
+    if ps_warning and price_to_sales_derived is not None:
+        ps_auth = price_to_sales_derived
+    else:
+        ps_auth = price_to_sales_reported if price_to_sales_reported is not None else price_to_sales_derived
+
+    # PEG = forward_pe_authoritative / earnings growth (long-term consensus
+    # ideally; yfinance only exposes earningsGrowth which is TTM-ish — a known
+    # limitation flagged in the snapshot rationale).
+    peg_value = compute_peg_safely(fpe_auth, earnings_growth_decimal)
+
+    # Price is in the trading currency; market_cap in trading; revenue in
+    # financial.  Each gets its own correct currency prefix so the bot can't
+    # accidentally compare TWD revenue to USD market cap.
+    trading_prefix = _CURRENCY_PREFIX.get(trading_ccy.upper(), f"{trading_ccy} ")
+    snapshot: dict = {
+        "ticker": ticker,
+        "trading_currency":   trading_ccy,
+        "financial_currency": financial_ccy,
+        "current_price":   _ratio_entry(current_price,
+                                         f"{trading_prefix}{current_price:.2f}" if current_price else None),
+        "market_cap":      _ratio_entry(market_cap / 1e9 if market_cap else None,
+                                         _money_display(market_cap / 1e9 if market_cap else None, trading_ccy)),
+        "revenue_ttm":     _ratio_entry(total_revenue / 1e9 if total_revenue else None,
+                                         _money_display(total_revenue / 1e9 if total_revenue else None, financial_ccy)),
+        "forward_pe_reported":      _ratio_entry(forward_pe_reported,
+                                                  f"{forward_pe_reported:.1f}x" if forward_pe_reported else None),
+        "forward_pe_derived":       _ratio_entry(derived_fpe,
+                                                  f"{derived_fpe:.1f}x" if derived_fpe else None),
+        "forward_pe_authoritative": _ratio_entry(fpe_auth,
+                                                  f"{fpe_auth:.1f}x" if fpe_auth else None),
+        "earnings_growth_recent": _ratio_entry(
+            earnings_growth_decimal * 100 if earnings_growth_decimal is not None else None,
+            f"{earnings_growth_decimal*100:.0f}%" if earnings_growth_decimal is not None else None,
+        ),
+    }
+    # Mark the source explicitly so the bot can't pass it off as long-term
+    if snapshot["earnings_growth_recent"] is not None:
+        snapshot["earnings_growth_recent"]["source"] = (
+            "yfinance.earningsGrowth — recent QUARTERLY growth, NOT long-term "
+            "5Y consensus. Use with caution; high-growth names typically can't "
+            "sustain this rate."
+        )
+
+    # PEG — only when computable, with a calc breakdown the bot can quote
+    if peg_value is not None and fpe_auth is not None and earnings_growth_decimal is not None:
+        snapshot["peg"] = {
+            "value":   round(peg_value, 2),
+            "display": f"{peg_value:.2f}",
+            "calc":    (f"{fpe_auth:.1f} / {earnings_growth_decimal*100:.0f}% = "
+                        f"{peg_value:.2f} (recent qtrly growth — NOT 5Y consensus)"),
+            "warning": (
+                "PEG denominator uses recent quarterly earnings growth, which "
+                "is typically much higher than sustainable long-term growth. A "
+                "'true' 5Y-consensus PEG for high-growth stocks is usually "
+                "0.8-1.5; values <0.5 here are almost always artefacts of "
+                "this denominator mismatch, NOT genuine undervaluation."
+            ),
+        }
+    else:
+        snapshot["peg"] = None  # bot forbidden from claiming PEG
+
+    snapshot["p_s_reported"]      = _ratio_entry(price_to_sales_reported,
+                                                  f"{price_to_sales_reported:.2f}" if price_to_sales_reported else None)
+    snapshot["p_s_derived"]       = _ratio_entry(price_to_sales_derived,
+                                                  f"{price_to_sales_derived:.2f}" if price_to_sales_derived else None)
+    snapshot["p_s_authoritative"] = _ratio_entry(ps_auth,
+                                                  f"{ps_auth:.2f}" if ps_auth else None)
+    snapshot["roe"]          = _ratio_entry(
+        roe_decimal * 100 if roe_decimal is not None else None,
+        f"{roe_decimal*100:.0f}%" if roe_decimal is not None else None,
+    )
+    snapshot["net_margin"]   = _ratio_entry(
+        net_margin_decimal * 100 if net_margin_decimal is not None else None,
+        f"{net_margin_decimal*100:.1f}%" if net_margin_decimal is not None else None,
+    )
+    snapshot["gross_margin"] = _ratio_entry(
+        gross_margin_decimal * 100 if gross_margin_decimal is not None else None,
+        f"{gross_margin_decimal*100:.1f}%" if gross_margin_decimal is not None else None,
+    )
+    return snapshot
+
+
+def _snapshot_display_strings(snapshot: dict | None) -> set[str]:
+    """Return the set of ``display`` strings in a valuation_snapshot.
+
+    Used by submit_thesis to build the allowed_displays set for the digit
+    fabrication check.  Includes the PEG calc breakdown components so the
+    bot can quote either the final PEG ("1.10") or the calc string fragments
+    ("27.4", "24.9%") that come from the snapshot itself.
+    """
+    if not snapshot:
+        return set()
+    out: set[str] = set()
+    for value in snapshot.values():
+        if isinstance(value, dict):
+            disp = value.get("display")
+            if isinstance(disp, str):
+                out.add(disp)
+            # PEG carries a 'calc' string too — accept fragments so the bot
+            # can quote "27.4 / 25% = 1.10" verbatim.
+            calc = value.get("calc")
+            if isinstance(calc, str):
+                # Add each whitespace-separated token that contains a digit
+                for tok in calc.replace("=", " ").replace("/", " ").split():
+                    if any(c.isdigit() for c in tok):
+                        out.add(tok)
+    return out
+
+
 def get_fundamentals(ticker: str) -> str:
     """Return real fundamental metrics for a ticker from yfinance.
 
@@ -331,9 +519,26 @@ def get_fundamentals(ticker: str) -> str:
 
     warnings: list[str] = []
 
-    # A. P/S TTM cross-check.
+    # Currency-mismatch guard: yfinance reports marketCap in the trading
+    # currency (e.g. USD for an ADR) but totalRevenue in financialCurrency
+    # (e.g. TWD for TSM, EUR for ASML).  Dividing the two gives a meaningless
+    # ratio; we skip the derivation and warn loudly so the bot knows P/S is
+    # unreliable for this name.
+    trading_ccy = info.get("currency") or "USD"
+    financial_ccy = info.get("financialCurrency") or trading_ccy
+    currency_mismatch = (trading_ccy.upper() != financial_ccy.upper())
+    if currency_mismatch:
+        warnings.append(
+            f"Currency mismatch: marketCap in {trading_ccy} but totalRevenue "
+            f"in {financial_ccy}.  P/S derivation skipped — the yfinance "
+            f"reported P/S ({price_to_sales}) is the only safe value, but "
+            f"absolute P/S comparison vs USD-reporting peers is also unreliable. "
+            f"Treat valuation-multiple narratives for {ticker} with extra caution."
+        )
+
+    # A. P/S TTM cross-check (only when currencies match).
     derived_ps = None
-    if market_cap and total_revenue:
+    if market_cap and total_revenue and not currency_mismatch:
         try:
             derived_ps = market_cap / total_revenue
         except ZeroDivisionError:
@@ -400,6 +605,34 @@ def get_fundamentals(ticker: str) -> str:
     except Exception:
         pass
 
+    # ── Phase 6 — valuation_snapshot ──────────────────────────────────────────
+    # Structured, pre-computed ratios with display strings.  The bot is
+    # required to cite ratios verbatim from these display strings; any
+    # numeric token in the thesis narrative that isn't in this snapshot
+    # (or in the peer_snapshot) is rejected as fabrication.
+    #
+    # _authoritative fields: derived value when reported disagrees by >30%
+    # (i.e. a warning fired), otherwise the reported value.  This is what
+    # the bot should cite.
+    valuation_snapshot = _build_valuation_snapshot(
+        ticker=ticker,
+        current_price=current_price,
+        trading_ccy=trading_ccy,
+        financial_ccy=financial_ccy,
+        market_cap=market_cap,
+        total_revenue=total_revenue,
+        forward_eps=forward_eps,
+        forward_pe_reported=forward_pe_val,
+        derived_fpe=(current_price / forward_eps) if (current_price and forward_eps) else None,
+        price_to_sales_reported=price_to_sales,
+        price_to_sales_derived=derived_ps,
+        earnings_growth_decimal=info.get("earningsGrowth"),
+        roe_decimal=info.get("returnOnEquity"),
+        net_margin_decimal=info.get("profitMargins"),
+        gross_margin_decimal=info.get("grossMargins"),
+        warnings=warnings,
+    )
+
     return json.dumps({
         "ticker": ticker,
         "currency": info.get("currency"),
@@ -439,6 +672,11 @@ def get_fundamentals(ticker: str) -> str:
         # Phase 4c integrity additions
         "_capex_intensity_pct": capex_intensity_pct,
         "_warnings": warnings,
+        # Phase 6 — structured snapshot with authoritative values + display strings.
+        # See validation in submit_thesis: every digit-bearing token in the
+        # narrative must appear in one of the 'display' strings here (or the
+        # peer_snapshot from get_peer_metrics).
+        "valuation_snapshot": valuation_snapshot,
     })
 
 
