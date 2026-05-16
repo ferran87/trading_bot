@@ -581,215 +581,180 @@ def _t212_headers(demo: bool, owner: str | None = None) -> dict | None:
     return t212_headers(demo, owner)
 
 
+def _t212_get(
+    path_or_url: str,
+    demo: bool,
+    owner: str | None = None,
+    *,
+    params: dict | None = None,
+    timeout: int = 10,
+    swallow_status: tuple[int, ...] = (),
+    log_label: str = "",
+) -> dict | list | None:
+    """GET a T212 endpoint and return parsed JSON, or ``None`` on error.
+
+    ``path_or_url`` may be a relative path (``equity/portfolio``) or a full URL
+    (used by paginated callers that follow ``nextPagePath``).  ``swallow_status``
+    lists HTTP codes treated as expected-empty (no WARNING log) — e.g. ``(403,)``
+    for ``/equity/portfolio`` which returns 403 when the account is empty.
+    """
+    import requests
+    from core.t212_auth import t212_base_url
+    headers = _t212_headers(demo, owner)
+    if not headers:
+        return None
+    url = path_or_url if path_or_url.startswith("http") else f"{t212_base_url(demo)}/{path_or_url}"
+    try:
+        resp = requests.get(url, headers=headers, timeout=timeout, params=params)
+        if resp.status_code in swallow_status:
+            return None
+        resp.raise_for_status()
+        return resp.json()
+    except Exception as exc:
+        log.warning("_t212_get(%s, demo=%s, owner=%s): %s",
+                    log_label or path_or_url, demo, owner, exc)
+        return None
+
+
 @st.cache_data(ttl=300)
 def _t212_total_deposited(demo: bool, owner: str | None = None) -> float:
     """Return the net EUR deposited into the T212 account (deposits − withdrawals).
 
     Paginates through the full transaction history.  TTL=300s (5 min) because
-    deposits are rare — no need to hit the API on every page refresh.
-    Returns 0.0 if credentials are missing or the API is unreachable.
+    deposits are rare.  Returns 0.0 on error or missing credentials.
     """
-    import requests
-    headers = _t212_headers(demo, owner)
-    if not headers:
-        return 0.0
-    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
     deposited = 0.0
-    url: str | None = f"{base}/api/v0/history/transactions"
-    try:
-        while url:
-            resp = requests.get(url, headers=headers, timeout=10, params={"limit": 50})
-            resp.raise_for_status()
-            data = resp.json()
-            for tx in data.get("items", []):
-                tx_type = tx.get("type", "").upper()
-                amount  = float(tx.get("amount", 0))
-                if tx_type == "DEPOSIT":
-                    deposited += amount
-                elif tx_type == "WITHDRAWAL":
-                    deposited -= amount
-            next_path = data.get("nextPagePath")
-            url = f"{base}{next_path}" if next_path else None
-    except Exception as exc:
-        log.warning("_t212_total_deposited(demo=%s, owner=%s): %s", demo, owner, exc)
+    next_url: str | None = "history/transactions"
+    while next_url:
+        data = _t212_get(next_url, demo, owner, params={"limit": 50},
+                         log_label="history/transactions")
+        if not isinstance(data, dict):
+            break
+        for tx in data.get("items", []):
+            tx_type = tx.get("type", "").upper()
+            amount  = float(tx.get("amount", 0))
+            if tx_type == "DEPOSIT":
+                deposited += amount
+            elif tx_type == "WITHDRAWAL":
+                deposited -= amount
+        next_path = data.get("nextPagePath")
+        from core.t212_auth import t212_base_url
+        # nextPagePath is a path without /api/v0 prefix (already in base)
+        next_url = f"{t212_base_url(demo).rsplit('/api/v0', 1)[0]}{next_path}" if next_path else None
     return deposited
 
 
 @st.cache_data(ttl=60)
 def _t212_account(demo: bool, owner: str | None = None) -> dict[str, float] | None:
-    """Fetch cash and total equity from T212 /equity/account/summary.
+    """Fetch cash and total equity from ``/equity/account/summary``.
 
-    Returns dict with keys: cash_eur, invested_eur, total_eur.
-    Returns None if credentials are missing or the API is unreachable.
+    Returns dict with keys ``cash_eur, invested_eur, total_eur,
+    realized_pnl_eur, unrealized_pnl_eur`` or ``None`` on error.
     """
-    import requests
-    headers = _t212_headers(demo, owner)
-    if not headers:
+    data = _t212_get("equity/account/summary", demo, owner, log_label="account/summary")
+    if not isinstance(data, dict):
         return None
-    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
-    try:
-        resp = requests.get(
-            f"{base}/api/v0/equity/account/summary",
-            headers=headers,
-            timeout=10,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        cash_block  = data.get("cash", {})
-        inv_block   = data.get("investments", {})
-        total_block = data.get("totalValue", data.get("total", {}))
-        cash  = float(cash_block.get("availableToTrade", cash_block.get("free", 0)))
-        total = float(
-            total_block if isinstance(total_block, (int, float))
-            else total_block.get("amount", cash)
-        )
-        invested         = float(inv_block.get("currentValue", max(total - cash, 0.0)))
-        realized_pnl     = float(inv_block.get("realizedProfitLoss", 0.0))
-        unrealized_pnl   = float(inv_block.get("unrealizedProfitLoss", 0.0))
-        return {
-            "cash_eur":          cash,
-            "invested_eur":      invested,
-            "total_eur":         total,
-            "realized_pnl_eur":  realized_pnl,
-            "unrealized_pnl_eur": unrealized_pnl,
-        }
-    except Exception as exc:
-        log.warning("_t212_account(demo=%s, owner=%s): %s", demo, owner, exc)
-        return None
+    cash_block  = data.get("cash", {})
+    inv_block   = data.get("investments", {})
+    total_block = data.get("totalValue", data.get("total", {}))
+    cash  = float(cash_block.get("availableToTrade", cash_block.get("free", 0)))
+    total = float(
+        total_block if isinstance(total_block, (int, float))
+        else total_block.get("amount", cash)
+    )
+    return {
+        "cash_eur":           cash,
+        "invested_eur":       float(inv_block.get("currentValue", max(total - cash, 0.0))),
+        "total_eur":          total,
+        "realized_pnl_eur":   float(inv_block.get("realizedProfitLoss", 0.0)),
+        "unrealized_pnl_eur": float(inv_block.get("unrealizedProfitLoss", 0.0)),
+    }
 
 
 @st.cache_data(ttl=30)
 def _t212_portfolio(demo: bool, owner: str | None = None) -> pd.DataFrame:
-    """Fetch open positions from T212 /equity/portfolio.
+    """Fetch open positions from ``/equity/portfolio``.
 
-    Returns a DataFrame with columns:
-      ticker, qty, avg_cost_eur, market_value_eur, unrealized_pnl_eur, currency
-
-    Returns an empty DataFrame when the account is empty (T212 returns 403 for
-    an empty portfolio — this is expected, not an auth error) or unreachable.
+    Empty account returns 403 from T212 — silenced (returns empty DataFrame
+    without logging an error).
     """
-    import requests
-    headers = _t212_headers(demo, owner)
-    if not headers:
+    items = _t212_get("equity/portfolio", demo, owner,
+                      swallow_status=(403,), log_label="portfolio")
+    if not isinstance(items, list):
         return pd.DataFrame()
-    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
-    try:
-        resp = requests.get(
-            f"{base}/api/v0/equity/portfolio",
-            headers=headers,
-            timeout=10,
-        )
-        if resp.status_code == 403:
-            return pd.DataFrame()   # empty account — not an auth failure
-        resp.raise_for_status()
-        items = resp.json()
-        rows = []
-        for item in items:
-            qty = float(item.get("quantity", 0))
-            rows.append({
-                "ticker":             item.get("ticker", ""),
-                "qty":                qty,
-                "avg_cost_eur":       float(item.get("averagePrice", 0)),
-                "market_value_eur":   float(item.get("currentPrice", 0)) * qty,
-                "unrealized_pnl_eur": float(item.get("ppl", 0)),
-                "currency":           item.get("currency", "EUR"),
-            })
-        return pd.DataFrame(rows)
-    except Exception as exc:
-        log.warning("_t212_portfolio(demo=%s, owner=%s): %s", demo, owner, exc)
-        return pd.DataFrame()
+    rows = []
+    for item in items:
+        qty = float(item.get("quantity", 0))
+        rows.append({
+            "ticker":             item.get("ticker", ""),
+            "qty":                qty,
+            "avg_cost_eur":       float(item.get("averagePrice", 0)),
+            "market_value_eur":   float(item.get("currentPrice", 0)) * qty,
+            "unrealized_pnl_eur": float(item.get("ppl", 0)),
+            "currency":           item.get("currency", "EUR"),
+        })
+    return pd.DataFrame(rows)
 
 
 @st.cache_data(ttl=15)
 def _t212_open_orders(demo: bool, owner: str | None = None) -> pd.DataFrame:
-    """Fetch open (NEW / PENDING_EXECUTION) orders from T212.
-
-    Returns DataFrame with columns:
-      order_id, ticker, operació, quantitat, estat, creat_at
-    Returns empty DataFrame on error or no open orders.
-    """
-    import requests
-    headers = _t212_headers(demo, owner)
-    if not headers:
+    """Fetch open (NEW / PENDING_EXECUTION) orders from ``/equity/orders``."""
+    orders = _t212_get("equity/orders", demo, owner, log_label="orders")
+    if not isinstance(orders, list):
         return pd.DataFrame()
-    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
-    try:
-        resp = requests.get(f"{base}/api/v0/equity/orders", headers=headers, timeout=10)
-        resp.raise_for_status()
-        orders = resp.json()
-        rows = []
-        for o in orders:
-            rows.append({
-                "order_id":  o.get("id"),
-                "ticker":    o.get("ticker", ""),
-                "operació":  o.get("side", "BUY"),
-                "quantitat": float(o.get("quantity", 0)),
-                "estat":     o.get("status", ""),
-                "creat_at":  (o.get("createdAt") or "")[:19].replace("T", " "),
-            })
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
-    except Exception as exc:
-        log.warning("_t212_open_orders(demo=%s, owner=%s): %s", demo, owner, exc)
-        return pd.DataFrame()
+    rows = [{
+        "order_id":  o.get("id"),
+        "ticker":    o.get("ticker", ""),
+        "operació":  o.get("side", "BUY"),
+        "quantitat": float(o.get("quantity", 0)),
+        "estat":     o.get("status", ""),
+        "creat_at":  (o.get("createdAt") or "")[:19].replace("T", " "),
+    } for o in orders]
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
 
 
 @st.cache_data(ttl=30)
 def _t212_order_history(demo: bool, limit: int = 50, owner: str | None = None) -> pd.DataFrame:
-    """Fetch filled order history from T212 /equity/history/orders.
+    """Fetch filled order history from ``/equity/history/orders``.
 
-    This is the source of truth for executed prices and fees.  T212 returns
-    a nested structure: each item has an ``order`` block and a ``fill`` block.
-    Fees are in ``fill.walletImpact.taxes``; when absent we estimate from the
+    Source of truth for executed prices and fees.  T212 returns a nested
+    structure: each item has an ``order`` block and a ``fill`` block.  Fees
+    come from ``fill.walletImpact.taxes``; when absent we estimate from the
     difference between ``netValue`` and ``qty × price``.
-
-    Returns DataFrame with columns:
-      data, ticker, nom, operació, quantitat, preu_eur, total_eur,
-      comissió_eur, estat, order_id
     """
-    import requests
-    headers = _t212_headers(demo, owner)
-    if not headers:
+    data = _t212_get("equity/history/orders", demo, owner,
+                     params={"limit": limit}, log_label="history/orders")
+    if not isinstance(data, dict):
         return pd.DataFrame()
-    base = "https://demo.trading212.com" if demo else "https://live.trading212.com"
-    try:
-        resp = requests.get(
-            f"{base}/api/v0/equity/history/orders",
-            headers=headers, timeout=10,
-            params={"limit": limit},
-        )
-        resp.raise_for_status()
-        items = resp.json().get("items", [])
-        rows = []
-        for item in items:
-            order  = item.get("order", {})
-            fill   = item.get("fill", {})
-            wallet = fill.get("walletImpact", {})
-            taxes  = wallet.get("taxes", [])
+    items = data.get("items", [])
+    rows = []
+    for item in items:
+        order  = item.get("order", {})
+        fill   = item.get("fill", {})
+        wallet = fill.get("walletImpact", {})
+        taxes  = wallet.get("taxes", [])
 
-            qty   = float(fill.get("quantity") or order.get("filledQuantity") or 0)
-            price = float(fill.get("price", 0))
-            net   = float(wallet.get("netValue", qty * price))
-            fx    = float(wallet.get("fxRate", 1) or 1)
+        qty   = float(fill.get("quantity") or order.get("filledQuantity") or 0)
+        price = float(fill.get("price", 0))
+        net   = float(wallet.get("netValue", qty * price))
+        fx    = float(wallet.get("fxRate", 1) or 1)
 
-            # Fee: sum explicit taxes first; fall back to netValue difference
-            fee = sum(float(t.get("quantity") or t.get("value") or 0) for t in taxes)
-            if fee == 0 and abs(net - qty * price) > 0.001:
-                fee = abs(net - qty * price)
+        # Fee: sum explicit taxes first; fall back to netValue difference
+        fee = sum(float(t.get("quantity") or t.get("value") or 0) for t in taxes)
+        if fee == 0 and abs(net - qty * price) > 0.001:
+            fee = abs(net - qty * price)
 
-            inst = order.get("instrument", {})
-            rows.append({
-                "data":         (fill.get("filledAt") or order.get("createdAt") or "")[:19].replace("T", " "),
-                "ticker":       order.get("ticker", ""),
-                "nom":          inst.get("name", order.get("ticker", "")),
-                "operació":     order.get("side", ""),
-                "quantitat":    qty,
-                "preu_eur":     round(price * (1 / fx if fx != 1 else 1), 4),
-                "total_eur":    round(net, 2),
-                "comissió_eur": round(fee, 4),
-                "estat":        order.get("status", ""),
-                "order_id":     order.get("id"),
-            })
-        return pd.DataFrame(rows) if rows else pd.DataFrame()
-    except Exception as exc:
-        log.warning("_t212_order_history(demo=%s, owner=%s): %s", demo, owner, exc)
-        return pd.DataFrame()
+        inst = order.get("instrument", {})
+        rows.append({
+            "data":         (fill.get("filledAt") or order.get("createdAt") or "")[:19].replace("T", " "),
+            "ticker":       order.get("ticker", ""),
+            "nom":          inst.get("name", order.get("ticker", "")),
+            "operació":     order.get("side", ""),
+            "quantitat":    qty,
+            "preu_eur":     round(price * (1 / fx if fx != 1 else 1), 4),
+            "total_eur":    round(net, 2),
+            "comissió_eur": round(fee, 4),
+            "estat":        order.get("status", ""),
+            "order_id":     order.get("id"),
+        })
+    return pd.DataFrame(rows) if rows else pd.DataFrame()
