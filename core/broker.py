@@ -595,7 +595,8 @@ class Trading212Broker:
         suffix = "PAPER" if self._demo else "LIVE"
         owner_suffix = (self._owner.upper() if self._owner else "")
 
-        def _resolve(prefix: str) -> str:
+        def _resolve(prefix: str) -> tuple[str, str]:
+            """Return (value, env_var_name_used) for the first non-empty match."""
             candidates: list[str] = []
             if owner_suffix:
                 candidates.append(f"{prefix}_{suffix}_{owner_suffix}")
@@ -604,11 +605,24 @@ class Trading212Broker:
             for name in candidates:
                 v = os.environ.get(name, "").strip()
                 if v:
-                    return v
-            return ""
+                    return v, name
+            return "", candidates[0]
 
-        key = _resolve("T212_API_KEY")
-        secret = _resolve("T212_API_SECRET")
+        key,    key_var    = _resolve("T212_API_KEY")
+        secret, secret_var = _resolve("T212_API_SECRET")
+
+        # Warn when an owner-specific var was requested but the generic fallback
+        # is being used — this means orders for this owner will silently go to
+        # whatever account the generic key belongs to (typically Ferran's).
+        if owner_suffix and key:
+            expected_key_var = f"T212_API_KEY_{suffix}_{owner_suffix}"
+            if key_var != expected_key_var:
+                log.warning(
+                    "Trading212Broker: owner=%r has no dedicated %s — "
+                    "falling back to %r which may point to a DIFFERENT account. "
+                    "Set %s in .env to suppress this warning.",
+                    self._owner, expected_key_var, key_var, expected_key_var,
+                )
 
         owner_hint = f" for owner={self._owner!r}" if self._owner else ""
         if not key:

@@ -139,7 +139,7 @@ def _run_strategist_subprocess(mode: str) -> None:
 
 # ── Section renderers ─────────────────────────────────────────────────────────
 
-def _render_pending_proposals(proposals: list[Theme]) -> None:
+def _render_pending_proposals(proposals: list[Theme], *, is_admin: bool = False) -> None:
     # Sort by potential descending, then importance as tiebreaker
     sorted_proposals = sorted(proposals, key=lambda t: (t.potential, t.importance), reverse=True)
 
@@ -174,30 +174,31 @@ def _render_pending_proposals(proposals: list[Theme]) -> None:
 
             st.caption(f"Proposat el {_fmt_date(t.proposed_at)}")
 
-            # Explicit action buttons at the bottom, full-width labeled
-            col_approve, col_reject, col_spacer = st.columns([2, 2, 3])
-            with col_approve:
-                if st.button(
-                    "✅ Aprovar tema",
-                    key=f"approve_theme_{t.id}",
-                    use_container_width=True,
-                    type="primary",
-                ):
-                    _approve_theme(t.id)
-                    st.success(f"'{t.name}' activat.")
-                    st.rerun()
-            with col_reject:
-                if st.button(
-                    "❌ Rebutjar proposta",
-                    key=f"reject_theme_{t.id}",
-                    use_container_width=True,
-                ):
-                    _reject_theme(t.id)
-                    st.info(f"'{t.name}' arxivat.")
-                    st.rerun()
+            # Explicit action buttons at the bottom, full-width labeled (admin-only)
+            if is_admin:
+                col_approve, col_reject, col_spacer = st.columns([2, 2, 3])
+                with col_approve:
+                    if st.button(
+                        "✅ Aprovar tema",
+                        key=f"approve_theme_{t.id}",
+                        use_container_width=True,
+                        type="primary",
+                    ):
+                        _approve_theme(t.id)
+                        st.success(f"'{t.name}' activat.")
+                        st.rerun()
+                with col_reject:
+                    if st.button(
+                        "❌ Rebutjar proposta",
+                        key=f"reject_theme_{t.id}",
+                        use_container_width=True,
+                    ):
+                        _reject_theme(t.id)
+                        st.info(f"'{t.name}' arxivat.")
+                        st.rerun()
 
 
-def _render_review_notes(notes: list[ThemeReviewNote], themes_by_id: dict[int, Theme]) -> None:
+def _render_review_notes(notes: list[ThemeReviewNote], themes_by_id: dict[int, Theme], *, is_admin: bool = False) -> None:
     unread = [n for n in notes if n.status == "unread"]
     read   = [n for n in notes if n.status == "read"]
 
@@ -218,20 +219,24 @@ def _render_review_notes(notes: list[ThemeReviewNote], themes_by_id: dict[int, T
         is_unread  = (n.status == "unread")
 
         with st.container(border=True):
-            col_title, col_read, col_dismiss = st.columns([6, 1, 1])
+            if is_admin:
+                col_title, col_read, col_dismiss = st.columns([6, 1, 1])
+            else:
+                col_title = st.container()
             with col_title:
                 badge = " 🆕" if is_unread else ""
                 st.markdown(f"{sev_emoji} **{theme_name}**{badge}")
-            with col_read:
-                if is_unread and st.button(
-                    "👁", key=f"read_note_{n.id}", help="Marcar com llegida"
-                ):
-                    _mark_note_read(n.id)
-                    st.rerun()
-            with col_dismiss:
-                if st.button("✖", key=f"dismiss_note_{n.id}", help="Descartar nota"):
-                    _dismiss_note(n.id)
-                    st.rerun()
+            if is_admin:
+                with col_read:
+                    if is_unread and st.button(
+                        "👁", key=f"read_note_{n.id}", help="Marcar com llegida"
+                    ):
+                        _mark_note_read(n.id)
+                        st.rerun()
+                with col_dismiss:
+                    if st.button("✖", key=f"dismiss_note_{n.id}", help="Descartar nota"):
+                        _dismiss_note(n.id)
+                        st.rerun()
 
             st.markdown(f"**Observació:** {n.observation}")
             st.markdown(f"**Recomanació:** {n.recommendation}")
@@ -241,7 +246,7 @@ def _render_review_notes(notes: list[ThemeReviewNote], themes_by_id: dict[int, T
             )
 
 
-def _render_active_themes(themes: list[Theme]) -> None:
+def _render_active_themes(themes: list[Theme], *, is_admin: bool = False) -> None:
     sorted_themes = sorted(themes, key=lambda t: (t.potential, t.importance), reverse=True)
     st.subheader(f"📚 Temes actius ({len(sorted_themes)}) — ordenats per potencial")
     if not sorted_themes:
@@ -269,7 +274,7 @@ def _render_active_themes(themes: list[Theme]) -> None:
                     f"Aprovat {_fmt_date(t.approved_at)}"
                 )
             with hcol2:
-                if st.button(
+                if is_admin and st.button(
                     "🗄 Arxivar",
                     key=f"archive_theme_{t.id}",
                     help="Arxivar aquest tema",
@@ -324,33 +329,34 @@ def _render_active_themes(themes: list[Theme]) -> None:
                 else:
                     st.caption("Cap condició definida.")
 
-            # Edit form — inline
-            with st.expander("✏️ Editar qualificacions"):
-                with st.form(key=f"edit_theme_{t.id}"):
-                    new_imp = st.slider(
-                        "Importància (1-5)",
-                        min_value=1, max_value=5,
-                        value=t.importance,
-                        key=f"imp_slider_{t.id}",
-                    )
-                    st.caption(_IMPORTANCE_LABELS.get(new_imp, ""))
-                    new_pot = st.slider(
-                        "Potencial (1-5)",
-                        min_value=1, max_value=5,
-                        value=t.potential,
-                        key=f"pot_slider_{t.id}",
-                    )
-                    st.caption(_POTENTIAL_LABELS.get(new_pot, ""))
-                    new_notes = st.text_area(
-                        "Notes personals",
-                        value=t.user_notes or "",
-                        key=f"notes_{t.id}",
-                        height=80,
-                    )
-                    if st.form_submit_button("💾 Desar canvis"):
-                        _update_theme(t.id, new_imp, new_pot, new_notes)
-                        st.success("Qualificacions actualitzades.")
-                        st.rerun()
+            # Edit form — inline (admin-only)
+            if is_admin:
+                with st.expander("✏️ Editar qualificacions"):
+                    with st.form(key=f"edit_theme_{t.id}"):
+                        new_imp = st.slider(
+                            "Importància (1-5)",
+                            min_value=1, max_value=5,
+                            value=t.importance,
+                            key=f"imp_slider_{t.id}",
+                        )
+                        st.caption(_IMPORTANCE_LABELS.get(new_imp, ""))
+                        new_pot = st.slider(
+                            "Potencial (1-5)",
+                            min_value=1, max_value=5,
+                            value=t.potential,
+                            key=f"pot_slider_{t.id}",
+                        )
+                        st.caption(_POTENTIAL_LABELS.get(new_pot, ""))
+                        new_notes = st.text_area(
+                            "Notes personals",
+                            value=t.user_notes or "",
+                            key=f"notes_{t.id}",
+                            height=80,
+                        )
+                        if st.form_submit_button("💾 Desar canvis"):
+                            _update_theme(t.id, new_imp, new_pot, new_notes)
+                            st.success("Qualificacions actualitzades.")
+                            st.rerun()
 
 
 def _render_archived_themes(themes: list[Theme]) -> None:
@@ -368,29 +374,32 @@ def _render_archived_themes(themes: list[Theme]) -> None:
 
 # ── Main render ───────────────────────────────────────────────────────────────
 
-def render_themes_tab() -> None:
+def render_themes_tab(*, is_admin: bool = False) -> None:
     st.header("📚 Temes d'inversió")
     st.caption(
         "El Strategist proposa narratives d'inversió durables (2-3 anys). "
         "Tu les aproves, edites i arxives. L'Analyst (bot 30) avalua els candidats "
         "dins de cada tema aprovat."
     )
+    if not is_admin:
+        st.info("👁 Mode visualització — només Ferran pot aprovar, editar o arxivar temes.")
 
-    # ── Trigger buttons ───────────────────────────────────────────────────────
-    col_propose, col_review = st.columns(2)
-    with col_propose:
-        if st.button(
-            "✨ Proposar nous temes",
-            help="Claude analitza l'univers i proposa 4-5 noves narratives temàtiques.",
-        ):
-            _run_strategist_subprocess("propose")
+    # ── Trigger buttons (admin-only) ──────────────────────────────────────────
+    if is_admin:
+        col_propose, col_review = st.columns(2)
+        with col_propose:
+            if st.button(
+                "✨ Proposar nous temes",
+                help="Claude analitza l'univers i proposa 4-5 noves narratives temàtiques.",
+            ):
+                _run_strategist_subprocess("propose")
 
-    with col_review:
-        if st.button(
-            "🔍 Revisar temes existents",
-            help="Claude examina els temes actius i mostra notes informatives si detecta novetats.",
-        ):
-            _run_strategist_subprocess("review")
+        with col_review:
+            if st.button(
+                "🔍 Revisar temes existents",
+                help="Claude examina els temes actius i mostra notes informatives si detecta novetats.",
+            ):
+                _run_strategist_subprocess("review")
 
     st.divider()
 
@@ -436,14 +445,14 @@ def render_themes_tab() -> None:
 
     # ── Sections ──────────────────────────────────────────────────────────────
     if pending_proposals:
-        _render_pending_proposals(pending_proposals)
+        _render_pending_proposals(pending_proposals, is_admin=is_admin)
         st.divider()
 
     if review_notes:
-        _render_review_notes(review_notes, themes_by_id)
+        _render_review_notes(review_notes, themes_by_id, is_admin=is_admin)
         st.divider()
 
-    _render_active_themes(active_themes)
+    _render_active_themes(active_themes, is_admin=is_admin)
 
     if archived_themes:
         st.divider()

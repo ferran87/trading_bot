@@ -25,6 +25,12 @@ watchlists.yaml → CONFIG.watchlists
     etfs_ucits:  [VWRL.AS, ...]
     crypto_etps: [BTCE.DE, ...]
 
+users.yaml → CONFIG.users, CONFIG.admin_owner
+    users:       [{name, role}]  — role: admin | viewer
+    Admin is the first entry with role=admin.  Only admin can approve / reject
+    in the Strategy Lab, Themes, and Thesis dashboard tabs.
+    Adding a new user: add entry here + T212 env vars + YAML bot entries + --init-db.
+
 Environment variables (all from .env or shell; shell overrides .env)
 ---------------------------------------------------------------------
 BROKER_BACKEND              mock | ibkr | t212  (default: mock)
@@ -75,6 +81,7 @@ class Config:
         self._settings: dict[str, Any] | None = None
         self._watchlists: dict[str, Any] | None = None
         self._strategies: dict[str, Any] | None = None
+        self._users: list[dict[str, Any]] | None = None
 
     @property
     def settings(self) -> dict[str, Any]:
@@ -97,6 +104,34 @@ class Config:
         if self._strategies is None:
             self._strategies = _load_yaml("strategies.yaml")
         return self._strategies
+
+    @property
+    def users(self) -> list[dict[str, Any]]:
+        """User roster from ``config/users.yaml``.
+
+        Returns an empty list when the file does not exist so the rest of the
+        codebase degrades gracefully (e.g. no admin → all action buttons are
+        hidden as a safe default).
+        """
+        if self._users is None:
+            users_path = CONFIG_DIR / "users.yaml"
+            if users_path.exists():
+                raw = _load_yaml("users.yaml")
+                self._users = raw.get("users", [])
+            else:
+                self._users = []
+        return self._users
+
+    @property
+    def admin_owner(self) -> str | None:
+        """Name of the admin user, or *None* if no admin is defined.
+
+        The first entry with ``role: admin`` in ``config/users.yaml`` is used.
+        """
+        for u in self.users:
+            if u.get("role") == "admin":
+                return u["name"]
+        return None
 
     def reload_strategies(self) -> None:
         """Invalidate the cached strategies dict so the next access re-reads

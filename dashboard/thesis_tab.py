@@ -249,13 +249,15 @@ def _render_scorecard(thesis, theme_name_map: dict[int, str]) -> None:
 
 # ── Main render function ───────────────────────────────────────────────────────
 
-def render_thesis_tab() -> None:
+def render_thesis_tab(*, is_admin: bool = False) -> None:
     """Render the full '🧠 Tesis d'inversió' tab."""
     st.header("🧠 Tesis d'inversió")
     st.caption(
         "Claude manté tesis narratives a mig termini sobre un univers curat de 30-50 accions. "
         "Cada acció proposada requereix la teva aprovació — el bot no opera mai de forma autònoma."
     )
+    if not is_admin:
+        st.info("👁 Mode visualització — només Ferran pot aprovar o rebutjar accions.")
 
     # ── Build theme name map once (used by _render_scorecard in all sections) ──
     theme_name_map = _build_theme_name_map()
@@ -303,16 +305,17 @@ def render_thesis_tab() -> None:
 
     st.divider()
 
-    # ── Trigger buttons ───────────────────────────────────────────────────────
-    col_daily, col_sunday = st.columns(2)
-    with col_daily:
-        if st.button("▶ Revisió diària", help="Revisa totes les tesis actives"):
-            _run_pm_agent(sunday_mode=False)
-            st.rerun()
-    with col_sunday:
-        if st.button("☀️ Revisió diumenge (+ candidats)", help="Revisió + escaneig de nous candidats"):
-            _run_pm_agent(sunday_mode=True)
-            st.rerun()
+    # ── Trigger buttons (admin-only) ──────────────────────────────────────────
+    if is_admin:
+        col_daily, col_sunday = st.columns(2)
+        with col_daily:
+            if st.button("▶ Revisió diària", help="Revisa totes les tesis actives"):
+                _run_pm_agent(sunday_mode=False)
+                st.rerun()
+        with col_sunday:
+            if st.button("☀️ Revisió diumenge (+ candidats)", help="Revisió + escaneig de nous candidats"):
+                _run_pm_agent(sunday_mode=True)
+                st.rerun()
 
     st.divider()
 
@@ -351,7 +354,10 @@ def render_thesis_tab() -> None:
             size_eur = capital_eur * size_pct
 
             with st.container(border=True):
-                col_title, col_approve, col_reject = st.columns([6, 1, 1])
+                if is_admin:
+                    col_title, col_approve, col_reject = st.columns([6, 1, 1])
+                else:
+                    col_title = st.container()
                 with col_title:
                     st.markdown(
                         f"**{action_label}: {thesis.ticker}** &nbsp;&nbsp; "
@@ -359,17 +365,18 @@ def render_thesis_tab() -> None:
                         f"Mida: {size_pct:.0%} (≈ €{size_eur:.0f})"
                     )
 
-                with col_approve:
-                    if st.button("✅", key=f"approve_{action.id}", help="Aprovar"):
-                        _decide_action(action.id, "approved")
-                        st.success(f"{thesis.ticker}: acció aprovada.")
-                        st.rerun()
+                if is_admin:
+                    with col_approve:
+                        if st.button("✅", key=f"approve_{action.id}", help="Aprovar"):
+                            _decide_action(action.id, "approved")
+                            st.success(f"{thesis.ticker}: acció aprovada.")
+                            st.rerun()
 
-                with col_reject:
-                    if st.button("❌", key=f"reject_{action.id}", help="Rebutjar"):
-                        _decide_action(action.id, "rejected")
-                        st.info(f"{thesis.ticker}: acció rebutjada.")
-                        st.rerun()
+                    with col_reject:
+                        if st.button("❌", key=f"reject_{action.id}", help="Rebutjar"):
+                            _decide_action(action.id, "rejected")
+                            st.info(f"{thesis.ticker}: acció rebutjada.")
+                            st.rerun()
 
                 # Thesis narrative
                 st.markdown(f"**Tesi:** {thesis.thesis_text}")

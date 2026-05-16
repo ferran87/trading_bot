@@ -1,0 +1,28 @@
+# User roster + roles for the trading bot dashboard.
+#
+# role: admin  → can approve / reject in Strategy Lab, Themes, and Thesis tabs;
+#                can trigger AI agent runs (Critic, Strategist, Portfolio Manager).
+# role: viewer → read-only access to all tabs; sees proposals, decisions, and
+#                track-record but cannot act on them.
+#
+# Only one admin is supported in v1.  Adding a second admin is possible by
+# changing role to 'admin' on another entry — but the dashboard will use the
+# FIRST admin found in this list.
+#
+# Steps to add a new user:
+#   1. Add an entry here (name must match Bot.owner in the DB / strategies.yaml).
+#   2. Add T212 credentials to .env:
+#        T212_API_KEY_PAPER_<NAME_UPPER>=...
+#        T212_API_SECRET_PAPER_<NAME_UPPER>=...
+#   3. Add bot entries in config/strategies.yaml with  owner: <Name>  and unique ids.
+#   4. Run  python main.py --init-db  to create the DB rows.
+
+users:
+  - name: Ferran
+    role: admin
+
+  - name: Antonio
+    role: viewer
+
+  - name: Adria
+    role: viewer

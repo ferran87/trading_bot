@@ -228,7 +228,7 @@ def _format_delta_pct(proposed: float | None, baseline: float | None) -> str:
     return f"  {arrow} ({delta:+.2f}pp)"
 
 
-def _render_proposal_card(row: pd.Series) -> None:
+def _render_proposal_card(row: pd.Series, *, is_admin: bool = False) -> None:
     bt = row["backtest"] or {}
     wf = row["walk_forward"] or {}
     wf_train = wf.get("train", {})
@@ -238,24 +238,28 @@ def _render_proposal_card(row: pd.Series) -> None:
     direction = "↑" if row["proposed_value"] > row["current_value"] else "↓"
 
     with st.container(border=True):
-        c1, c2, c3 = st.columns([6, 1, 1])
+        if is_admin:
+            c1, c2, c3 = st.columns([6, 1, 1])
+        else:
+            c1 = st.container()
         with c1:
             st.markdown(
                 f"#### {strategy_label} — `{row['param_name']}`: "
                 f"**{row['current_value']:g}** {direction} **{row['proposed_value']:g}**"
             )
-        with c2:
-            if st.button("✅ Aprovar", key=f"appr_{row['id']}", use_container_width=True):
-                _approve(int(row["id"]))
-                _fetch_pending.clear()
-                _fetch_history.clear()
-                st.rerun()
-        with c3:
-            if st.button("❌ Rebutjar", key=f"rej_{row['id']}", use_container_width=True):
-                _reject(int(row["id"]))
-                _fetch_pending.clear()
-                _fetch_history.clear()
-                st.rerun()
+        if is_admin:
+            with c2:
+                if st.button("✅ Aprovar", key=f"appr_{row['id']}", use_container_width=True):
+                    _approve(int(row["id"]))
+                    _fetch_pending.clear()
+                    _fetch_history.clear()
+                    st.rerun()
+            with c3:
+                if st.button("❌ Rebutjar", key=f"rej_{row['id']}", use_container_width=True):
+                    _reject(int(row["id"]))
+                    _fetch_pending.clear()
+                    _fetch_history.clear()
+                    st.rerun()
 
         # Ratchet badge
         if row["passes_ratchet"]:
@@ -319,8 +323,10 @@ def _render_proposal_card(row: pd.Series) -> None:
         st.caption(f"Proposta #{row['id']} — creada {row['created_at']:%Y-%m-%d %H:%M}")
 
 
-def _render_run_button() -> None:
+def _render_run_button(*, is_admin: bool = False) -> None:
     """Manual trigger to invoke the critic agent in a background subprocess."""
+    if not is_admin:
+        return
     if st.button("▶️ Executar revisió ara", help="Llança l'agent crític per a totes les estratègies"):
         # Fire-and-forget subprocess. The dashboard remains responsive; the
         # user refreshes the page to see new proposals appear.
@@ -365,18 +371,20 @@ def _render_history(history: pd.DataFrame) -> None:
     st.dataframe(out, use_container_width=True, hide_index=True)
 
 
-def render_strategy_lab_tab() -> None:
+def render_strategy_lab_tab(*, is_admin: bool = False) -> None:
     st.subheader("🧪 Laboratori d'estratègies")
     st.caption(
         "L'agent crític analitza l'historial de cada estratègia i proposa "
         "canvis numèrics als seus paràmetres. Cap canvi s'aplica fins que el "
         "validis aquí."
     )
+    if not is_admin:
+        st.info("👁 Mode visualització — només Ferran pot aprovar o rebutjar propostes.")
 
     # Top control row
     cl, cr = st.columns([1, 3])
     with cl:
-        _render_run_button()
+        _render_run_button(is_admin=is_admin)
     with cr:
         corpus = _fetch_corpus_stats()
         if corpus:
@@ -397,7 +405,7 @@ def render_strategy_lab_tab() -> None:
         st.info("Cap proposta pendent. Executa la revisió per generar-ne.")
     else:
         for _, row in pending.iterrows():
-            _render_proposal_card(row)
+            _render_proposal_card(row, is_admin=is_admin)
 
     st.divider()
 

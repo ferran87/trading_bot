@@ -1358,14 +1358,19 @@ with tab_bt:
 with tab_readme:
     render_readme_tab()
 
+# ── Admin check ───────────────────────────────────────────────────────────────
+# Only the admin user (defined in config/users.yaml) can approve / reject in the
+# AI tabs. All other users see the same content but the action buttons are hidden.
+_is_admin = (selected_owner == CONFIG.admin_owner)
+
 # ── Strategy Lab tab ───────────────────────────────────────────────────────────
 with tab_lab:
-    render_strategy_lab_tab()
+    render_strategy_lab_tab(is_admin=_is_admin)
 
 # ── Themes tab (Phase 4 — Strategist) ─────────────────────────────────────────
 with tab_themes:
-    render_themes_tab()
+    render_themes_tab(is_admin=_is_admin)
 
 # ── AI Thesis Bot tab ──────────────────────────────────────────────────────────
 with tab_thesis:
-    render_thesis_tab()
+    render_thesis_tab(is_admin=_is_admin)
