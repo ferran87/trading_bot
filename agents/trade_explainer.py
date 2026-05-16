@@ -290,86 +290,25 @@ def explain_trades(
         "el context del mercat i les notícies recents de cada acció abans d'escriure l'explicació."
     )
 
-    messages: list[dict] = [{"role": "user", "content": user_message}]
-
     log.info(
         "trade_explainer: starting agent for bot=%d strategy=%s, %d trade(s)",
         bot_id, bot_strategy, len(trades),
     )
 
-    # ── The agent loop ───────────────────────────────────────────────────────
-    #
-    # This is the heart of how agents work:
-    #
-    #   iteration 1: Claude sees the trades, decides to call get_rsi_history("MSFT")
-    #   iteration 2: we return RSI data, Claude calls get_news_headlines("MSFT")
-    #   iteration 3: we return news, Claude calls get_market_context("2026-04-25")
-    #   iteration 4: we return market data, Claude has enough → writes explanation
-    #
-    # We never tell Claude what order to look things up. It decides.
-    # The loop only ends when Claude sets stop_reason = "end_turn".
-
-    iteration = 0
-    max_iterations = 20  # safety cap — prevents infinite loops
-
-    while iteration < max_iterations:
-        iteration += 1
-
-        response = client.messages.create(
-            model="claude-sonnet-4-5",  # Sonnet: better Catalan quality; runs once/day post-trade
-            max_tokens=4096,
-            system=system_prompt,
-            tools=TOOL_DEFINITIONS,
-            messages=messages,
-        )
-
-        log.debug(
-            "trade_explainer: iteration=%d stop_reason=%s input_tokens=%d output_tokens=%d",
-            iteration, response.stop_reason,
-            response.usage.input_tokens, response.usage.output_tokens,
-        )
-
-        # ── Case 1: Claude is done ───────────────────────────────────────────
-        if response.stop_reason == "end_turn":
-            explanation = "\n".join(
-                block.text
-                for block in response.content
-                if hasattr(block, "text")
-            )
-            log.info(
-                "trade_explainer: done in %d iteration(s), %d chars",
-                iteration, len(explanation),
-            )
-            return explanation
-
-        # ── Case 2: Claude wants to call tools ───────────────────────────────
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-
-                log.info(
-                    "trade_explainer: tool_call tool=%s input=%s",
-                    block.name, json.dumps(block.input),
-                )
-                result = _dispatch(block.name, block.input)
-
-                tool_results.append({
-                    "type":        "tool_result",
-                    "tool_use_id": block.id,
-                    "content":     result,
-                })
-
-            # Feed the assistant's message (with tool calls) + our results back
-            # This is how Claude "sees" the tool output on the next iteration
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user",      "content": tool_results})
-            continue
-
-        # ── Case 3: Unexpected stop reason ───────────────────────────────────
-        log.warning("trade_explainer: unexpected stop_reason=%s", response.stop_reason)
-        break
-
-    log.error("trade_explainer: hit max_iterations=%d without finishing", max_iterations)
+    # ── The agent loop (shared mechanics live in agents/_loop.py) ────────────
+    from agents._loop import run_tool_loop
+    result = run_tool_loop(
+        client,
+        model="claude-sonnet-4-5",  # Sonnet: better Catalan quality; runs once/day
+        system_prompt=system_prompt,
+        tools=TOOL_DEFINITIONS,
+        initial_user_message=user_message,
+        dispatch=_dispatch,
+        max_iterations=20,
+        max_tokens=4096,
+        cache_prompt=False,  # trade_explainer rebuilds prompt per call (per-strategy)
+        log_prefix="trade_explainer",
+        log=log,
+    )
+    return result["final_text"]
     return ""

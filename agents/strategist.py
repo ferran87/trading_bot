@@ -171,83 +171,28 @@ def _run_strategist_loop(mode: str) -> dict:
             "Recorda: NO modifiques les qualificacions — ets informatiu."
         )
 
-    # Prompt-cache: mark last tool definition so entire system+tools prefix is cached
-    cached_tools = TOOL_DEFINITIONS.copy()
-    if cached_tools:
-        last = dict(cached_tools[-1])
-        last["cache_control"] = {"type": "ephemeral"}
-        cached_tools[-1] = last
-
-    messages: list[dict] = [{"role": "user", "content": task_description}]
-
     log.info("strategist: starting agent mode=%s date=%s", mode, today)
 
-    max_iterations = 50  # propose mode can call many tools (fundamentals per candidate)
-    iteration = 0
-    final_text = ""
-    errors: list[str] = []
-
-    while iteration < max_iterations:
-        iteration += 1
-
-        try:
-            response = client.messages.create(
-                model="claude-sonnet-4-5",
-                max_tokens=8096,
-                system=[
-                    {
-                        "type": "text",
-                        "text": _SYSTEM_PROMPT,
-                        "cache_control": {"type": "ephemeral"},
-                    }
-                ],
-                tools=cached_tools,
-                messages=messages,
-            )
-        except anthropic.APIError as e:
-            log.error("strategist: API error at iteration %d: %s", iteration, e)
-            errors.append(f"APIError at iteration {iteration}: {e}")
-            break
-
-        log.debug(
-            "strategist: iteration=%d stop_reason=%s in=%d out=%d",
-            iteration, response.stop_reason,
-            response.usage.input_tokens, response.usage.output_tokens,
-        )
-
-        if response.stop_reason == "end_turn":
-            final_text = "\n".join(
-                block.text for block in response.content if hasattr(block, "text")
-            )
-            log.info("strategist: done in %d iteration(s), %d chars", iteration, len(final_text))
-            break
-
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-                log.info(
-                    "strategist: tool_call tool=%s input=%s",
-                    block.name, json.dumps(block.input)[:200],
-                )
-                result = dispatch(block.name, block.input)
-                tool_results.append({
-                    "type":        "tool_result",
-                    "tool_use_id": block.id,
-                    "content":     result,
-                })
-
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user",      "content": tool_results})
-            continue
-
-        log.warning("strategist: unexpected stop_reason=%s", response.stop_reason)
-        break
-
-    else:
-        log.error("strategist: hit max_iterations=%d without finishing", max_iterations)
-        errors.append(f"Hit max_iterations={max_iterations}")
+    # Shared agent loop handles iteration, prompt-caching, tool dispatch, and
+    # swallows anthropic.APIError into the returned ``errors`` list.
+    from agents._loop import run_tool_loop
+    loop_result = run_tool_loop(
+        client,
+        model="claude-sonnet-4-5",
+        system_prompt=_SYSTEM_PROMPT,
+        tools=TOOL_DEFINITIONS,
+        initial_user_message=task_description,
+        dispatch=dispatch,
+        max_iterations=50,  # propose mode can call many fundamentals tools
+        max_tokens=8096,
+        cache_prompt=True,
+        log_prefix="strategist",
+        log=log,
+        swallow_api_errors=True,
+    )
+    iteration  = loop_result["iterations"]
+    final_text = loop_result["final_text"]
+    errors     = loop_result["errors"]
 
     # ── Build summary ──────────────────────────────────────────────────────────
     from core.db import Theme, ThemeReviewNote, get_session

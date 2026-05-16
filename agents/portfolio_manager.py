@@ -314,84 +314,28 @@ def run_daily_review(is_sunday: bool = False) -> dict:
             "Crida get_active_theses() per veure quines tesis has de revisar."
         )
 
-    # ── Prompt-cached system + tools ─────────────────────────────────────────
-    # System prompt is stable → cache it.
-    # Tool list is stable → cache its last element so the full prefix is cached.
-    cached_tools = TOOL_DEFINITIONS.copy()
-    if cached_tools:
-        last = dict(cached_tools[-1])
-        last["cache_control"] = {"type": "ephemeral"}
-        cached_tools[-1] = last
-
-    messages: list[dict] = [{"role": "user", "content": task_description}]
-
     log.info(
         "portfolio_manager: starting agent is_sunday=%s date=%s",
         is_sunday, today,
     )
 
-    max_iterations = 40  # generous cap — may review many theses + candidates
-    iteration = 0
-    final_text = ""
-
-    while iteration < max_iterations:
-        iteration += 1
-
-        response = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=8096,
-            system=[
-                {
-                    "type": "text",
-                    "text": _SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral"},
-                }
-            ],
-            tools=cached_tools,
-            messages=messages,
-        )
-
-        log.debug(
-            "portfolio_manager: iteration=%d stop_reason=%s in=%d out=%d",
-            iteration, response.stop_reason,
-            response.usage.input_tokens, response.usage.output_tokens,
-        )
-
-        if response.stop_reason == "end_turn":
-            final_text = "\n".join(
-                block.text for block in response.content if hasattr(block, "text")
-            )
-            log.info(
-                "portfolio_manager: done in %d iteration(s), %d chars",
-                iteration, len(final_text),
-            )
-            break
-
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-                log.info(
-                    "portfolio_manager: tool_call tool=%s input=%s",
-                    block.name, json.dumps(block.input)[:200],
-                )
-                result = dispatch(block.name, block.input)
-                tool_results.append({
-                    "type":        "tool_result",
-                    "tool_use_id": block.id,
-                    "content":     result,
-                })
-
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user",      "content": tool_results})
-            continue
-
-        log.warning("portfolio_manager: unexpected stop_reason=%s", response.stop_reason)
-        break
-
-    else:
-        log.error("portfolio_manager: hit max_iterations=%d without finishing", max_iterations)
+    # Shared agent loop handles iteration, prompt-caching, tool dispatch.
+    from agents._loop import run_tool_loop
+    loop_result = run_tool_loop(
+        client,
+        model="claude-sonnet-4-5",
+        system_prompt=_SYSTEM_PROMPT,
+        tools=TOOL_DEFINITIONS,
+        initial_user_message=task_description,
+        dispatch=dispatch,
+        max_iterations=40,
+        max_tokens=8096,
+        cache_prompt=True,
+        log_prefix="portfolio_manager",
+        log=log,
+    )
+    iteration  = loop_result["iterations"]
+    final_text = loop_result["final_text"]
 
     # ── Summarise what happened ───────────────────────────────────────────────
     from core.db import ThesisReviewLog, ThesisAction, Thesis, get_session

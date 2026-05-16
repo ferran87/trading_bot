@@ -363,100 +363,48 @@ def run_critic_for_strategy(strategy: str, *, max_iterations: int = 30) -> dict:
         f"ratchet test i no estiguin sobreajustades."
     )
 
-    messages: list[dict] = [{"role": "user", "content": user_message}]
-
     n_proposals_submitted = 0
     n_validation_errors   = 0
 
+    def _track_submit(tool_name: str, _tool_input: dict, result: str) -> None:
+        nonlocal n_proposals_submitted, n_validation_errors
+        if tool_name != "submit_proposal":
+            return
+        parsed = json.loads(result)
+        if parsed.get("error"):
+            n_validation_errors += 1
+        elif parsed.get("proposal_id"):
+            n_proposals_submitted += 1
+
     log.info("strategy_critic: starting agent for strategy=%s", strategy)
 
-    # ── Prompt caching ──────────────────────────────────────────────────
-    # The system prompt and tool definitions are identical across every
-    # iteration. Marking them with cache_control lets Anthropic serve them
-    # from cache (5-min TTL) at ~10% of full input price. With 10-12
-    # iterations per critic run, this typically saves 30-40% of total cost.
-    #
-    # Reference: https://docs.anthropic.com/en/docs/build-with-claude/prompt-caching
-    cached_system = [{
-        "type":          "text",
-        "text":          _SYSTEM_PROMPT,
-        "cache_control": {"type": "ephemeral"},
-    }]
-    # Mark the LAST tool definition with cache_control — this caches all
-    # tools above it (the cache breakpoint covers everything before it
-    # within the same scope).
-    cached_tools = [dict(t) for t in TOOL_DEFINITIONS]
-    cached_tools[-1] = {**cached_tools[-1], "cache_control": {"type": "ephemeral"}}
+    # Shared agent loop handles iteration, prompt-caching, tool dispatch.
+    from agents._loop import run_tool_loop
+    loop_result = run_tool_loop(
+        client,
+        model="claude-sonnet-4-5",
+        system_prompt=_SYSTEM_PROMPT,
+        tools=TOOL_DEFINITIONS,
+        initial_user_message=user_message,
+        dispatch=_dispatch,
+        max_iterations=max_iterations,
+        max_tokens=4096,
+        cache_prompt=True,
+        on_tool_result=_track_submit,
+        log_prefix=f"strategy_critic[{strategy}]",
+        log=log,
+    )
 
-    for iteration in range(1, max_iterations + 1):
-        response = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=4096,
-            system=cached_system,
-            tools=cached_tools,
-            messages=messages,
-        )
-
-        # cache_read_input_tokens / cache_creation_input_tokens are the cache
-        # hit/miss counters from the Anthropic Usage object — log them so we
-        # can verify caching is actually working in production.
-        usage = response.usage
-        log.info(
-            "strategy_critic[%s] iter=%d stop=%s in=%d out=%d "
-            "cache_read=%d cache_create=%d",
-            strategy, iteration, response.stop_reason,
-            usage.input_tokens, usage.output_tokens,
-            getattr(usage, "cache_read_input_tokens", 0),
-            getattr(usage, "cache_creation_input_tokens", 0),
-        )
-
-        if response.stop_reason == "end_turn":
-            log.info(
-                "strategy_critic[%s]: done in %d iterations, %d proposal(s) submitted, %d rejected",
-                strategy, iteration, n_proposals_submitted, n_validation_errors,
-            )
-            return {
-                "strategy":             strategy,
-                "iterations":           iteration,
-                "proposals_submitted":  n_proposals_submitted,
-                "validation_errors":    n_validation_errors,
-            }
-
-        if response.stop_reason == "tool_use":
-            tool_results = []
-            for block in response.content:
-                if block.type != "tool_use":
-                    continue
-                log.info(
-                    "strategy_critic[%s] tool=%s input=%s",
-                    strategy, block.name,
-                    json.dumps(block.input)[:200],
-                )
-                result = _dispatch(block.name, block.input)
-                # Track submit_proposal outcomes
-                if block.name == "submit_proposal":
-                    parsed = json.loads(result)
-                    if parsed.get("error"):
-                        n_validation_errors += 1
-                    elif parsed.get("proposal_id"):
-                        n_proposals_submitted += 1
-                tool_results.append({
-                    "type":        "tool_result",
-                    "tool_use_id": block.id,
-                    "content":     result,
-                })
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user",      "content": tool_results})
-            continue
-
-        log.warning("strategy_critic[%s]: unexpected stop_reason=%s", strategy, response.stop_reason)
-        break
-
-    log.error("strategy_critic[%s]: hit max_iterations=%d", strategy, max_iterations)
-    return {
-        "strategy":             strategy,
-        "iterations":           max_iterations,
-        "proposals_submitted":  n_proposals_submitted,
-        "validation_errors":    n_validation_errors,
-        "warning":              "max_iterations reached",
+    summary: dict = {
+        "strategy":            strategy,
+        "iterations":          loop_result["iterations"],
+        "proposals_submitted": n_proposals_submitted,
+        "validation_errors":   n_validation_errors,
     }
+    if not loop_result["completed"]:
+        summary["warning"] = "max_iterations reached"
+    log.info(
+        "strategy_critic[%s]: done — %d proposal(s) submitted, %d rejected",
+        strategy, n_proposals_submitted, n_validation_errors,
+    )
+    return summary
