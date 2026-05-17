@@ -868,16 +868,25 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
             c5.metric("⏳ Reservat per ordres", f"€{reserved:,.2f}")
         else:
             # No account data → either missing credentials or API failure.
-            suffix = "PAPER" if t212_demo else "LIVE"
-            env_var = (
-                f"T212_API_KEY_{suffix}_{t212_owner.upper()}" if t212_owner
-                else f"T212_API_KEY_{suffix}"
-            )
-            st.warning(
-                f"⚠️ No s'ha pogut connectar al compte T212{owner_label}.  "
-                f"Comprova que **{env_var}** i el `_SECRET` corresponent estiguin "
-                "definits a `.env` (o `secrets.toml` a Streamlit Cloud)."
-            )
+            # Suppress the warning when the user has no enabled bots in this
+            # mode — typical case is empty live keys while only paper is in use.
+            n_enabled = int(bots_subset["enabled"].sum()) if not bots_subset.empty else 0
+            if n_enabled == 0:
+                st.caption(
+                    f"ℹ️ Cap bot habilitat en mode {'paper' if t212_demo else 'live'} "
+                    f"per a {t212_owner or 'aquest compte'} — secció T212 ocultada."
+                )
+            else:
+                suffix = "PAPER" if t212_demo else "LIVE"
+                env_var = (
+                    f"T212_API_KEY_{suffix}_{t212_owner.upper()}" if t212_owner
+                    else f"T212_API_KEY_{suffix}"
+                )
+                st.warning(
+                    f"⚠️ No s'ha pogut connectar al compte T212{owner_label}.  "
+                    f"Comprova que **{env_var}** i el `_SECRET` corresponent estiguin "
+                    "definits a `.env` (o `secrets.toml` a Streamlit Cloud)."
+                )
 
     st.markdown("#### 📂 Posicions obertes")
     if use_t212 and not t212_portfolio.empty:
