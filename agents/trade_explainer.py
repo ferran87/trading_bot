@@ -279,15 +279,36 @@ def explain_trades(
     # ── The initial message ──────────────────────────────────────────────────
     # We give Claude the raw trade data and ask it to explain.
     # Claude will then use tools to gather the context it needs.
+    #
+    # Resolve each trade's company name via yfinance so Claude can't confuse
+    # tickers (the OR.PA = L'Oréal incident: Claude narrated "OR Royalties /
+    # Osisko" — a Canadian gold-royalty company trading as OR.TO — instead of
+    # L'Oréal, the actual Paris-listed company T212 bought).  yfinance has
+    # session caching so this is essentially free.
+    import yfinance as yf
+    enriched_trades = []
+    for t in trades:
+        ticker = t.get("ticker", "")
+        try:
+            long_name = yf.Ticker(ticker).info.get("longName") or ""
+        except Exception:
+            long_name = ""
+        enriched_trades.append({**t, "company_name": long_name or ticker})
 
-    trades_text = json.dumps(trades, indent=2, default=str)
+    trades_text = json.dumps(enriched_trades, indent=2, default=str)
     strategy_label = _STRATEGY_LABELS.get(bot_strategy, bot_strategy)
     user_message = (
         f"Avui ({run_date}) el bot {strategy_label} (id={bot_id}) ha fet les següents operacions:\n\n"
         f"{trades_text}\n\n"
+        "IMPORTANT: cada operació porta un camp `company_name` amb el nom real "
+        "de l'empresa segons yfinance.  Usa SEMPRE aquest nom — no confonguis "
+        "tickers entre mercats (p.ex. OR.PA és L'Oréal a París, NO Osisko "
+        "Royalties que cotitza com OR a Toronto).\n\n"
         "Explica cada operació en català, en un llenguatge clar i sense tecnicismes. "
         "Utilitza les teves eines per buscar l'historial de RSI, "
-        "el context del mercat i les notícies recents de cada acció abans d'escriure l'explicació."
+        "el context del mercat i les notícies recents de cada acció abans d'escriure l'explicació. "
+        "Si les notícies que retorna l'eina semblen d'una empresa diferent a "
+        "`company_name`, ignora-les — són un artefacte de cerca per ticker, no senyal real."
     )
 
     log.info(
