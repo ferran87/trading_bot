@@ -14,7 +14,7 @@ Ticker input          yfinance as-is      yfinance → t212_instruments.json
 Fill timing           Immediate           120-second poll; pending on NEW
                                           status at timeout
 Pending fills?        Never               Yes
-Qty rounding          Allows floats       Floors to whole shares
+Qty rounding          Allows floats       Fractional shares (T212 native)
 Fill price currency   Input currency      Local ccy → EUR at fill
 Fees                  settings.yaml table T212 taxes array (may be empty
                                           in demo; falls back to 0.15% FX)
@@ -188,8 +188,9 @@ class Trading212Broker:
       - T212 uses negative quantity to indicate a SELL.
       - FX conversion fee: 0.15% on every trade in a non-account currency
         (e.g. USD stock in an EUR account).
-      - Fractional shares are supported; we floor to whole shares for
-        consistency with the rest of the system (positions, fills, P&L).
+      - Fractional shares are supported and used.  Strategies round their
+        target qty to 4 decimals; orders below ~0.01 share (dust) are
+        skipped to avoid T212-side rejection of tiny notionals.
     """
 
     _ORDER_POLL_INTERVAL_SEC = 2.0
@@ -374,19 +375,20 @@ class Trading212Broker:
         IMPORTANT: this POST must never be auto-retried — T212's beta order
         endpoints are not idempotent. A duplicate POST = a duplicate trade.
         """
-        import math
         import time
 
         t212_ticker = self._resolve_ticker(order.ticker)
         ccy = self._instrument_currency(order.ticker)
 
-        # Floor to whole shares — T212 supports fractional shares but our
-        # strategies size in whole units.
-        qty = math.floor(abs(order.qty))
-        if qty == 0:
+        # Fractional shares: T212 accepts non-integer quantities natively.
+        # Strategies already round to 4 decimals (e.g. 1.9422 shares); we
+        # only guard against dust orders (< 0.01 share) which T212 may
+        # reject as below the minimum notional.
+        qty = round(abs(order.qty), 4)
+        if qty < 0.01:
             log.warning(
-                "Trading212Broker: %s %s qty rounded to 0 — skipping",
-                order.side.value, order.ticker,
+                "Trading212Broker: %s %s qty %.4f below 0.01 dust threshold — skipping",
+                order.side.value, order.ticker, qty,
             )
             return Fill(
                 ticker=order.ticker,
@@ -401,11 +403,11 @@ class Trading212Broker:
             )
 
         # T212 convention: positive qty = BUY, negative qty = SELL.
-        signed_qty = float(qty) if order.side is Side.BUY else -float(qty)
+        signed_qty = qty if order.side is Side.BUY else -qty
         payload = {"quantity": signed_qty, "ticker": t212_ticker}
 
         log.info(
-            "Trading212Broker: placing %s %.0f %s (T212: %s, %s)",
+            "Trading212Broker: placing %s %.4f %s (T212: %s, %s)",
             order.side.value, qty, order.ticker, t212_ticker, ccy,
         )
 
@@ -491,22 +493,21 @@ class Trading212Broker:
         """Return a pending Fill using the reference price when the order is live
         but the market is closed.
 
-        IMPORTANT: use the floored integer qty (same as what was sent to T212),
-        not order.qty (the strategy's fractional target).  T212 only executes
-        whole shares; recording a fractional qty here would cause the virtual
-        book to diverge from the actual T212 position.
+        Records the fractional qty exactly as sent to T212 (rounded to 4
+        decimals to match the broker's accepted precision).  T212 supports
+        fractional shares natively; recording the exact submitted qty keeps
+        the virtual book aligned with the actual T212 position.
         """
-        import math
         from datetime import datetime, timezone
-        floored_qty = float(math.floor(abs(order.qty)))
+        qty = round(abs(order.qty), 4)
         return Fill(
             ticker=order.ticker,
             side=order.side,
-            qty=floored_qty,
+            qty=qty,
             price=order.ref_price_eur,
             price_eur=order.ref_price_eur,
             fx_rate=1.0,
-            fee_eur=estimate_fee_eur(order.ticker, floored_qty, order.ref_price_eur),
+            fee_eur=estimate_fee_eur(order.ticker, qty, order.ref_price_eur),
             timestamp=datetime.now(timezone.utc),
             broker_order_id=order_id,
             is_pending=True,

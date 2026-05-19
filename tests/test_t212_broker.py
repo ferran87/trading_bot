@@ -254,14 +254,34 @@ class TestPlaceMarketOrderSell:
 # ---------------------------------------------------------------------------
 
 class TestPlaceMarketOrderEdgeCases:
-    def test_zero_qty_returns_empty_fill(self, broker):
-        """qty < 1 after floor returns a zero fill rather than raising."""
-        order = _order(ticker="AAPL", qty=0.3)
-        # Should not call requests.post at all
+    def test_dust_qty_returns_empty_fill(self, broker):
+        """qty below 0.01 (dust) returns a zero fill rather than placing the order.
+
+        T212 supports fractional shares, but extremely small quantities can be
+        rejected as below the API's minimum notional.  We skip them client-side.
+        """
+        order = _order(ticker="AAPL", qty=0.005)
         with patch("requests.post") as mock_post:
             fill = broker.place_market_order(order)
         mock_post.assert_not_called()
         assert fill.qty == 0.0
+
+    def test_fractional_qty_places_order(self, broker):
+        """Fractional shares (≥ 0.01) are sent to T212 as-is — no flooring."""
+        order_resp = {
+            "id": 99, "ticker": "AAPL_US_EQ", "status": "FILLED",
+            "filledQuantity": 0.4422, "filledPrice": 100.0,
+            "limitPrice": None, "stopPrice": None,
+            "filledValue": 44.22, "taxes": [],
+        }
+        order = _order(ticker="AAPL", qty=0.4422)
+        with patch("requests.post", return_value=_mock_response(order_resp)) as mock_post:
+            fill = broker.place_market_order(order)
+        # The POST was made with the fractional qty, not floored
+        mock_post.assert_called_once()
+        sent_payload = mock_post.call_args.kwargs.get("json") or mock_post.call_args.args[1]
+        assert abs(sent_payload["quantity"] - 0.4422) < 1e-6
+        assert abs(fill.qty - 0.4422) < 1e-6
 
     def test_order_not_filled_raises(self, broker):
         """A REJECTED order should raise RuntimeError."""
