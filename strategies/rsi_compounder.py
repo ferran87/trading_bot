@@ -137,31 +137,35 @@ class RsiCompoundStrategy(Strategy):
                     f"catastrophic stop {gain*100:.1f}% <= {catastrophic_stop*100:.0f}%"
                 )
 
-            # Priority 2 — progressive trailing stop (only when profitable).
+            # Priority 2 — progressive trailing stop (only when profitable),
+            # measured in EUR.  See trend_momentum for the rationale: for
+            # US tickers, FX drift can make a 10% USD drawdown a flat EUR
+            # P&L, so we trigger on EUR drawdown instead (account currency).
             if exit_reason is None and gain > 0 and bars is not None and len(bars.df) > 0:
-                price_native = bars.last_close()
+                from analysis.market_data import to_eur_series, _venue_currency
+                eur_close = to_eur_series(bars.df["close"], _venue_currency(ticker))
                 entry_ts = pd.Timestamp(pos.entry_date)
-                since_entry = bars.df["close"][bars.df.index >= entry_ts]
-                peak_native = float(since_entry.max()) if not since_entry.empty else price_native
+                since_entry_eur = eur_close[eur_close.index >= entry_ts]
+                if not since_entry_eur.empty:
+                    peak_eur = float(since_entry_eur.max())
+                    price_eur = float(eur_close.iloc[-1])
 
-                # Current RSI determines how tight the stop is.
-                rsi_now = float("nan")
-                if close is not None and len(close) >= rsi_period + 1:
-                    rsi_now = float(rsi(close, rsi_period).iloc[-1])
+                    # Current RSI determines how tight the stop is.
+                    rsi_now = float("nan")
+                    if close is not None and len(close) >= rsi_period + 1:
+                        rsi_now = float(rsi(close, rsi_period).iloc[-1])
 
-                active = _active_trail(rsi_now, trail, trail_mid, trail_tight,
-                                       rsi_trail_mid, rsi_trail_tight)
-                drawdown = price_native / peak_native - 1.0
+                    active = _active_trail(rsi_now, trail, trail_mid, trail_tight,
+                                           rsi_trail_mid, rsi_trail_tight)
+                    drawdown_eur = price_eur / peak_eur - 1.0
 
-                if drawdown <= -active:
-                    fx_ratio = price / price_native if price_native else 1.0
-                    peak_eur = peak_native * fx_ratio
-                    rsi_label = f"{rsi_now:.0f}" if rsi_now == rsi_now else "n/a"
-                    exit_reason = (
-                        f"trailing stop {drawdown*100:.1f}% from peak "
-                        f"(RSI={rsi_label} -> trail={active*100:.0f}%, "
-                        f"peak=EUR{peak_eur:.2f}, now=EUR{price:.2f}, gain={gain*100:.1f}%)"
-                    )
+                    if drawdown_eur <= -active:
+                        rsi_label = f"{rsi_now:.0f}" if rsi_now == rsi_now else "n/a"
+                        exit_reason = (
+                            f"trailing stop {drawdown_eur*100:.1f}% from EUR peak "
+                            f"(RSI={rsi_label} -> trail={active*100:.0f}%, "
+                            f"peak=EUR{peak_eur:.2f}, now=EUR{price_eur:.2f}, gain={gain*100:.1f}%)"
+                        )
 
             # Priority 3 — time limit (only if never profitable).
             if exit_reason is None and gain <= 0 and days_held >= max_days:

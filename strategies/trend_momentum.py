@@ -191,21 +191,28 @@ class TrendMomentumStrategy(Strategy):
                             f"gain={gain*100:.1f}%)"
                         )
 
-            # Priority 3 — trailing stop (profitable only)
+            # Priority 3 — trailing stop (profitable only), measured in EUR.
+            # Convert the native close series to EUR using daily FX rates
+            # so the trail measures EUR drawdown (the account currency),
+            # not native-currency drawdown.  For US tickers this matters a
+            # lot: NVDA on 2026-06-05 had -12.9% USD drawdown but only
+            # +0.5% EUR gain due to FX drift.  Triggering on the USD
+            # drawdown would lock in basically nothing.
             if exit_reason is None and gain > 0 and close is not None:
+                from analysis.market_data import to_eur_series, _venue_currency
+                eur_close = to_eur_series(close, _venue_currency(ticker))
                 entry_ts = pd.Timestamp(pos.entry_date)
-                since_entry = close[close.index >= entry_ts]
-                peak_native = float(since_entry.max()) if not since_entry.empty else float(close.iloc[-1])
-                price_native = float(close.iloc[-1])
-                drawdown = price_native / peak_native - 1.0
-                if drawdown <= -trail_pct:
-                    fx_ratio = price / price_native if price_native else 1.0
-                    peak_eur = peak_native * fx_ratio
-                    exit_reason = (
-                        f"trailing stop {drawdown*100:.1f}% from peak "
-                        f"(trail={trail_pct*100:.0f}%, "
-                        f"peak=EUR{peak_eur:.2f}, gain={gain*100:.1f}%)"
-                    )
+                since_entry_eur = eur_close[eur_close.index >= entry_ts]
+                if not since_entry_eur.empty:
+                    peak_eur = float(since_entry_eur.max())
+                    price_eur = float(eur_close.iloc[-1])
+                    drawdown_eur = price_eur / peak_eur - 1.0
+                    if drawdown_eur <= -trail_pct:
+                        exit_reason = (
+                            f"trailing stop {drawdown_eur*100:.1f}% from EUR peak "
+                            f"(trail={trail_pct*100:.0f}%, "
+                            f"peak=EUR{peak_eur:.2f}, gain={gain*100:.1f}%)"
+                        )
 
             # Priority 4 — time limit (never profitable)
             if exit_reason is None and gain <= 0 and days_held >= max_days:

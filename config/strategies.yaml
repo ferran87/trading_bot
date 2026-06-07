@@ -272,11 +272,18 @@ strategies:
     rsi_entry_min: 40                 # RSI must have pulled back to at least 40
     rsi_entry_max: 62                 # RSI must not be too extended (not already > 62)
     rsi_momentum_days: 3              # RSI must be higher than 3 days ago (resuming)
-    trail_pct: 0.10                   # 10% trailing stop from peak. Tightened from 0.22 on 2026-06-07:
-                                      # 6-week sensitivity (bot 10 closed trades) showed the 22% trail
-                                      # NEVER fired — trend break always exited first at small losses
-                                      # after peaks of +17-27%. A 10% trail would have captured profit
-                                      # on CRM (+4.7%), COST (+10.9%), XOM (+9.4%) instead of -9%, -2%, -7%.
+    trail_pct: 0.08                   # 8% EUR trailing stop from peak.
+                                      # History of changes:
+                                      # 2026-06-07: 0.22 -> 0.10 (initial sensitivity, USD-based)
+                                      # 2026-06-07: 0.10 -> 0.08 + strategy code now measures drawdown
+                                      #             in EUR (not native USD), since EUR is the account
+                                      #             currency.  The 0.10 value was tuned against a buggy
+                                      #             USD-vs-EUR mixed analysis; once corrected, EUR peak
+                                      #             gains on US tickers were 4-6pp smaller than USD peaks
+                                      #             (FX drift ate them), so the trail must be tighter
+                                      #             to capture real EUR profit before trend break fires.
+                                      # 6-week data: trail=8% would exit MSFT at +4.1% EUR and NVDA at
+                                      #             +4.1% EUR (vs current near-zero realised P&L).
     catastrophic_stop: -0.15          # hard stop at -15% from avg entry
     trend_break_days: 3               # consecutive closes below SMA50 = trend broken
     max_days_held: 60                 # exit if never profitable after 60 days

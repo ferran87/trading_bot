@@ -159,6 +159,48 @@ def _venue_currency(ticker: str) -> str:
 _FX_FALLBACK: dict[str, float] = {"USD": 0.88, "CHF": 0.95}
 
 
+def to_eur_series(close, currency: str):
+    """Convert a native-currency close series to EUR using daily FX rates.
+
+    For each date in the index, applies the EUR/<ccy> rate from that date
+    (or the nearest prior cached value).  Used by strategies whose trailing
+    stop logic needs to measure drawdown in EUR (the account currency),
+    not in the instrument's native currency — otherwise FX moves can mask
+    real EUR P&L when stocks rally in USD but EUR strengthens against USD
+    (NVDA 2026-06-05 incident: -12.9% USD drawdown but +0.5% EUR gain).
+
+    Returns the same pandas index with EUR-denominated values.  EUR tickers
+    are returned unchanged.  If FX fetch fails entirely, returns the input
+    untouched (the trailing stop then degrades to native-currency behaviour
+    — same as the old code, no regression).
+    """
+    import pandas as pd
+    if close is None or len(close) == 0 or currency.upper() == "EUR":
+        return close
+    from core import fx
+    # Seed the cache by requesting the most recent date — this triggers a
+    # 2-year bulk download that populates every date in the window at once.
+    last_date = close.index[-1]
+    seed_date = last_date.date() if hasattr(last_date, "date") else last_date
+    try:
+        fx.eur_per_unit(currency, as_of=seed_date)
+    except Exception:
+        log.warning("to_eur_series: FX seed fetch failed for %s — returning native series", currency)
+        return close
+    # Convert each row; missing dates fall back to most recent prior rate
+    out_values = []
+    last_rate = None
+    for ts, native_price in close.items():
+        d = ts.date() if hasattr(ts, "date") else ts
+        try:
+            rate = fx.eur_per_unit(currency, as_of=d)
+            last_rate = rate
+        except Exception:
+            rate = last_rate if last_rate is not None else 1.0
+        out_values.append(float(native_price) * rate)
+    return pd.Series(out_values, index=close.index, name="close_eur")
+
+
 def last_prices_eur(bars_by_ticker: dict[str, Bars]) -> dict[str, float]:
     """Return the latest close price for each ticker, converted to EUR.
 
@@ -196,4 +238,5 @@ __all__ = [
     "prefetch_since",
     "clear_cache",
     "last_prices_eur",
+    "to_eur_series",
 ]
