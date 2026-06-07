@@ -266,6 +266,25 @@ class TestPlaceMarketOrderEdgeCases:
         mock_post.assert_not_called()
         assert fill.qty == 0.0
 
+    def test_nan_qty_returns_empty_fill_no_post(self, broker):
+        """A NaN qty (from a yfinance NaN price → strategy bug) must never reach
+        the T212 POST.  requests would otherwise raise InvalidJSONError when it
+        tries to serialize {"quantity": nan} (2026-06-05 META incident)."""
+        order = _order(ticker="META", qty=float("nan"))
+        with patch("requests.post") as mock_post:
+            fill = broker.place_market_order(order)
+        mock_post.assert_not_called()
+        assert fill.qty == 0.0
+
+    def test_inf_qty_returns_empty_fill_no_post(self, broker):
+        """Same guard applies to inf — defense-in-depth against any non-finite
+        value escaping a strategy."""
+        order = _order(ticker="META", qty=float("inf"))
+        with patch("requests.post") as mock_post:
+            fill = broker.place_market_order(order)
+        mock_post.assert_not_called()
+        assert fill.qty == 0.0
+
     def test_fractional_qty_places_order(self, broker):
         """Fractional shares (≥ 0.01) are sent to T212 as-is — no flooring."""
         order_resp = {

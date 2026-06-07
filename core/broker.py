@@ -375,7 +375,31 @@ class Trading212Broker:
         IMPORTANT: this POST must never be auto-retried — T212's beta order
         endpoints are not idempotent. A duplicate POST = a duplicate trade.
         """
+        import math as _math
         import time
+
+        # Defense-in-depth: reject NaN / inf BEFORE any I/O.  A buggy strategy
+        # or a yfinance NaN price can otherwise produce qty=nan which crashes
+        # requests' JSON encoder with InvalidJSONError (see 2026-06-05 META
+        # incident: yfinance returned NaN last_close, strategy didn't catch
+        # it because `nan <= 0` is False, qty became nan).
+        if not _math.isfinite(order.qty):
+            log.error(
+                "Trading212Broker: %s %s qty=%r is not finite — skipping order "
+                "(upstream strategy bug; expected a finite number)",
+                order.side.value, order.ticker, order.qty,
+            )
+            return Fill(
+                ticker=order.ticker,
+                side=order.side,
+                qty=0.0,
+                price=0.0,
+                price_eur=0.0,
+                fx_rate=1.0,
+                fee_eur=0.0,
+                timestamp=datetime.now(tz=timezone.utc),
+                broker_order_id=None,
+            )
 
         t212_ticker = self._resolve_ticker(order.ticker)
         ccy = self._instrument_currency(order.ticker)

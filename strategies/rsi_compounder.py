@@ -29,6 +29,7 @@ Sizing: per_position_pct (6.7%) × 3 lots ≈ 20% max exposure per name.
 from __future__ import annotations
 
 import logging
+import math
 
 import pandas as pd
 
@@ -120,7 +121,7 @@ class RsiCompoundStrategy(Strategy):
         for ticker, pos in snapshot.positions.items():
             bars = ctx.bars.get(ticker)
             price = ctx.prices_eur.get(ticker) or (bars.last_close() if bars is not None else None)
-            if price is None:
+            if price is None or not math.isfinite(price) or price <= 0:
                 continue
 
             days_held = (ctx.today - pos.entry_date).days
@@ -193,7 +194,7 @@ class RsiCompoundStrategy(Strategy):
 
             if add_reason:
                 qty = round(equity * per_pos_pct / price, 4)
-                if qty > 0:
+                if math.isfinite(qty) and qty > 0:
                     log.info(
                         "rsi_compounder bot=%d ADD %s: %s (avg_entry=%.2f qty=%.4f)",
                         ctx.bot_id, ticker, add_reason, pos.avg_entry_eur, qty,
@@ -223,7 +224,15 @@ class RsiCompoundStrategy(Strategy):
                 continue
 
             price = ctx.prices_eur.get(ticker) or bars.last_close()
-            if price <= 0:
+            # Guard against NaN/inf from yfinance (partially-loaded bar or
+            # corp-action day).  ``price <= 0`` does NOT catch NaN — all
+            # comparisons to NaN return False — and the NaN would otherwise
+            # cascade into qty and crash the broker on JSON encoding.
+            if price is None or not math.isfinite(price) or price <= 0:
+                log.warning(
+                    "rsi_compounder bot=%d SKIP %s — price unusable (%r)",
+                    ctx.bot_id, ticker, price,
+                )
                 continue
             if not market_was_oversold:
                 continue
@@ -238,7 +247,7 @@ class RsiCompoundStrategy(Strategy):
 
             dynamic_pct = min(1.0 / slots_available, per_pos_pct)
             qty = round(equity * dynamic_pct / price, 4)
-            if qty <= 0:
+            if not math.isfinite(qty) or qty <= 0:
                 continue
 
             log.info(

@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import datetime
 import logging
+import math
 from functools import lru_cache
 
 import pandas as pd
@@ -164,7 +165,7 @@ class TrendMomentumStrategy(Strategy):
         for ticker, pos in snapshot.positions.items():
             bars = ctx.bars.get(ticker)
             price = ctx.prices_eur.get(ticker) or (bars.last_close() if bars is not None else None)
-            if price is None:
+            if price is None or not math.isfinite(price) or price <= 0:
                 continue
 
             days_held = (ctx.today - pos.entry_date).days
@@ -250,7 +251,15 @@ class TrendMomentumStrategy(Strategy):
                 continue
 
             price = ctx.prices_eur.get(ticker) or bars.last_close()
-            if price <= 0:
+            # Guard against NaN/inf from yfinance (e.g. partially-loaded bar
+            # mid-session) — `price <= 0` does NOT catch NaN (all comparisons
+            # to NaN are False), so we'd otherwise propagate NaN into qty and
+            # crash the broker on JSON encoding (2026-06-05 META incident).
+            if price is None or not math.isfinite(price) or price <= 0:
+                log.warning(
+                    "trend_momentum bot=%d SKIP %s — price unusable (%r)",
+                    ctx.bot_id, ticker, price,
+                )
                 continue
 
             close = bars.df["close"]
@@ -284,7 +293,7 @@ class TrendMomentumStrategy(Strategy):
                 continue
 
             qty = round(equity * per_pos_pct / price, 4)
-            if qty <= 0:
+            if not math.isfinite(qty) or qty <= 0:
                 continue
 
             candidates.append((rsi_now, ticker, price, qty))
