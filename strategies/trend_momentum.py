@@ -48,6 +48,7 @@ from functools import lru_cache
 
 import pandas as pd
 
+from analysis.market_data import _venue_currency, to_eur_series
 from analysis.price_signals import rsi
 from core.config import CONFIG
 from core.types import AssetClass, Order, PortfolioSnapshot, Side
@@ -199,7 +200,6 @@ class TrendMomentumStrategy(Strategy):
             # +0.5% EUR gain due to FX drift.  Triggering on the USD
             # drawdown would lock in basically nothing.
             if exit_reason is None and gain > 0 and close is not None:
-                from analysis.market_data import to_eur_series, _venue_currency
                 eur_close = to_eur_series(close, _venue_currency(ticker))
                 entry_ts = pd.Timestamp(pos.entry_date)
                 since_entry_eur = eur_close[eur_close.index >= entry_ts]

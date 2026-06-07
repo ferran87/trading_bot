@@ -33,6 +33,7 @@ import math
 
 import pandas as pd
 
+from analysis.market_data import _venue_currency, to_eur_series
 from analysis.price_signals import rsi
 from core.config import CONFIG
 from core.types import AssetClass, Order, PortfolioSnapshot, Side
@@ -142,7 +143,6 @@ class RsiCompoundStrategy(Strategy):
             # US tickers, FX drift can make a 10% USD drawdown a flat EUR
             # P&L, so we trigger on EUR drawdown instead (account currency).
             if exit_reason is None and gain > 0 and bars is not None and len(bars.df) > 0:
-                from analysis.market_data import to_eur_series, _venue_currency
                 eur_close = to_eur_series(bars.df["close"], _venue_currency(ticker))
                 entry_ts = pd.Timestamp(pos.entry_date)
                 since_entry_eur = eur_close[eur_close.index >= entry_ts]
