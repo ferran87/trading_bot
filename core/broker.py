@@ -235,19 +235,48 @@ class Trading212Broker:
             "Content-Type": "application/json",
         }
 
+    # T212 LIVE applies strict per-endpoint rate limits (e.g. ~1 req / 2 s on
+    # /equity/account/summary).  When two bots share one owner's live account
+    # they hit it back-to-back during run_once and the second gets HTTP 429.
+    # Retry with backoff (honoring Retry-After) so the runner doesn't crash.
+    _MAX_429_RETRIES = 4
+    _DEFAULT_429_BACKOFF_SEC = 3.0
+
+    def _sleep_for_retry_after(self, resp) -> None:
+        import time
+        retry_after = resp.headers.get("Retry-After")
+        try:
+            secs = float(retry_after) if retry_after is not None else self._DEFAULT_429_BACKOFF_SEC
+        except (TypeError, ValueError):
+            secs = self._DEFAULT_429_BACKOFF_SEC
+        secs = max(secs, 1.0)
+        log.info("Trading212Broker: rate-limited (HTTP 429), sleeping %.1fs before retry", secs)
+        time.sleep(secs)
+
     def _get(self, path: str, params: dict | None = None) -> dict | list:
         import requests as _requests
         url = self._base_url + path
-        resp = _requests.get(url, headers=self._headers(), params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        for attempt in range(self._MAX_429_RETRIES):
+            resp = _requests.get(url, headers=self._headers(), params=params, timeout=30)
+            if resp.status_code == 429 and attempt < self._MAX_429_RETRIES - 1:
+                self._sleep_for_retry_after(resp)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        # Should not reach here — last iteration either returns or raises.
+        raise RuntimeError("Trading212Broker._get: unreachable")
 
     def _post(self, path: str, payload: dict) -> dict:
         import requests as _requests
         url = self._base_url + path
-        resp = _requests.post(url, json=payload, headers=self._headers(), timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        for attempt in range(self._MAX_429_RETRIES):
+            resp = _requests.post(url, json=payload, headers=self._headers(), timeout=30)
+            if resp.status_code == 429 and attempt < self._MAX_429_RETRIES - 1:
+                self._sleep_for_retry_after(resp)
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        raise RuntimeError("Trading212Broker._post: unreachable")
 
     # -- connection lifecycle --
 
