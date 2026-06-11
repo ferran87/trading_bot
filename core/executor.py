@@ -96,8 +96,15 @@ def run_orders(
         # and retry once. T212 supports fractional shares so this is always
         # safe — the broker's own dust-check (qty < 0.01) guards the floor.
         if not decision.approved and decision.reason.startswith("insufficient cash"):
-            fee_est = estimate_fee_eur(order.ticker, 1.0, order.ref_price_eur)
-            affordable = snapshot.cash_eur - fee_est
+            # Estimate fee at the FULL cash size, not at 1 share — for percentage
+            # fees (T212 0.15% FX charge on USD stocks) the fee scales with
+            # notional, so a 1-share estimate undershoots and the resized order
+            # still fails the cash check by ~the fee delta. Pad with 1% extra
+            # safety margin to absorb fill-price slippage between estimate and
+            # actual broker fill.
+            cash_qty_proxy = snapshot.cash_eur / order.ref_price_eur if order.ref_price_eur > 0 else 0.0
+            fee_est = estimate_fee_eur(order.ticker, cash_qty_proxy, order.ref_price_eur)
+            affordable = snapshot.cash_eur * 0.99 - fee_est
             if affordable > 0 and order.ref_price_eur > 0:
                 resized_qty = round(affordable / order.ref_price_eur, 4)
                 resized = Order(
