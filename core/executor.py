@@ -23,7 +23,7 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from core import risk
-from core.broker import BrokerInterface
+from core.broker import BrokerInterface, estimate_fee_eur
 from core.db import Trade as TradeModel
 from core.portfolio import Portfolio
 from core.types import Fill, Order, PortfolioSnapshot
@@ -91,6 +91,33 @@ def run_orders(
                 continue
 
         decision = risk.check(session, order, snapshot, today)
+
+        # If the only problem is insufficient cash, resize to available cash
+        # and retry once. T212 supports fractional shares so this is always
+        # safe — the broker's own dust-check (qty < 0.01) guards the floor.
+        if not decision.approved and decision.reason.startswith("insufficient cash"):
+            fee_est = estimate_fee_eur(order.ticker, 1.0, order.ref_price_eur)
+            affordable = snapshot.cash_eur - fee_est
+            if affordable > 0 and order.ref_price_eur > 0:
+                resized_qty = round(affordable / order.ref_price_eur, 4)
+                resized = Order(
+                    bot_id=order.bot_id,
+                    ticker=order.ticker,
+                    side=order.side,
+                    qty=resized_qty,
+                    signal_reason=order.signal_reason,
+                    ref_price_eur=order.ref_price_eur,
+                    expected_profit_eur=order.expected_profit_eur,
+                    asset_class=order.asset_class,
+                )
+                decision = risk.check(session, resized, snapshot, today)
+                if decision.approved:
+                    log.info(
+                        "RESIZED  bot=%d BUY %s %.4f→%.4f (cash-fit: €%.2f available)",
+                        bot_id, order.ticker, order.qty, resized_qty, snapshot.cash_eur,
+                    )
+                    order = resized
+
         if not decision.approved:
             report.rejected.append((order, decision.reason))
             log.info(

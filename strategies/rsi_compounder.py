@@ -148,7 +148,7 @@ class RsiCompoundStrategy(Strategy):
                 since_entry_eur = eur_close[eur_close.index >= entry_ts]
                 if not since_entry_eur.empty:
                     peak_eur = float(since_entry_eur.max())
-                    price_eur = float(eur_close.iloc[-1])
+                    price_eur = float(eur_close.dropna().iloc[-1])
 
                     # Current RSI determines how tight the stop is.
                     rsi_now = float("nan")

@@ -190,7 +190,11 @@ def _kpis_for(bot: dict, equity_df: pd.DataFrame, trades_df: pd.DataFrame) -> di
                 positions = Portfolio.open_positions(s, int(bot["id"]))
                 # Use avg_entry_eur as price proxy (market prices are
                 # injected later in app.py from live yfinance + T212 data).
-                invested = sum(p.qty * p.avg_entry_eur for p in positions)
+                invested = sum(
+                    p.qty * p.avg_entry_eur for p in positions
+                    if p.qty is not None and p.avg_entry_eur is not None
+                    and p.qty == p.qty and p.avg_entry_eur == p.avg_entry_eur
+                )
             total = cash + invested
         except Exception:
             total    = float(bot["initial_eur"])

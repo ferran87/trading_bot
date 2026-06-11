@@ -238,9 +238,12 @@ def _open_positions() -> pd.DataFrame:
                     "bot_id": p.bot_id,
                     "ticker": p.ticker,
                     "nom": names.get(p.ticker, p.ticker),
-                    "quantitat": p.qty,
-                    "preu_entrada_eur": round(p.avg_entry_eur, 2),
-                    "cost_eur": round(p.qty * p.avg_entry_eur, 2),
+                    "quantitat": p.qty if p.qty == p.qty else None,
+                    "preu_entrada_eur": round(p.avg_entry_eur, 2) if p.avg_entry_eur == p.avg_entry_eur else None,
+                    "cost_eur": round(p.qty * p.avg_entry_eur, 2)
+                    if p.qty is not None and p.qty == p.qty
+                    and p.avg_entry_eur is not None and p.avg_entry_eur == p.avg_entry_eur
+                    else None,
                     "data_entrada": p.entry_date,
                     "senyal_entrada": entry_reason.get((p.bot_id, p.ticker), "—"),
                 }

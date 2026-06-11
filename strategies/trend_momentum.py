@@ -158,7 +158,7 @@ class TrendMomentumStrategy(Strategy):
             mkt_close = mkt_bars.df["close"]
             mkt_sma = _sma(mkt_close, market_sma)
             if mkt_sma is not None:
-                market_in_uptrend = float(mkt_close.iloc[-1]) > mkt_sma
+                market_in_uptrend = mkt_bars.last_close() > mkt_sma
 
         # ── 1. EXIT + TREND-BREAK checks on held positions ────────────────────
         tickers_being_sold: set[str] = set()
@@ -205,7 +205,7 @@ class TrendMomentumStrategy(Strategy):
                 since_entry_eur = eur_close[eur_close.index >= entry_ts]
                 if not since_entry_eur.empty:
                     peak_eur = float(since_entry_eur.max())
-                    price_eur = float(eur_close.iloc[-1])
+                    price_eur = float(eur_close.dropna().iloc[-1])
                     drawdown_eur = price_eur / peak_eur - 1.0
                     if drawdown_eur <= -trail_pct:
                         exit_reason = (
@@ -273,7 +273,7 @@ class TrendMomentumStrategy(Strategy):
 
             # Condition A: stock above its SMA50
             sma50 = _sma(close, sma_period)
-            if sma50 is None or float(close.iloc[-1]) <= sma50:
+            if sma50 is None or float(close.dropna().iloc[-1]) <= sma50:
                 continue
 
             # Condition B: RSI in pullback zone

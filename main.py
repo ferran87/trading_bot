@@ -118,6 +118,10 @@ def main() -> int:
         if today.weekday() >= 5:
             log.info("Auto mode: weekend (%s) — skipping run.", today.strftime("%A"))
             return 0
+        now = datetime.now()
+        if now.hour < 8:
+            log.info("Auto mode: too early (%s) — skipping run (trigger fires at 08:00).", now.strftime("%H:%M"))
+            return 0
         from core.db import Bot, RunLog, get_session
         with get_session() as s:
             enabled_ids = frozenset(b.id for b in s.query(Bot).filter(Bot.enabled == 1).all())

@@ -44,11 +44,14 @@ class Portfolio:
         )
         cash += float(adjustments)
         for t in session.query(Trade).filter(Trade.bot_id == bot_id).all():
-            notional = t.qty * t.price_eur
+            qty = t.qty if t.qty is not None and t.qty == t.qty else 0.0
+            price = t.price_eur if t.price_eur is not None and t.price_eur == t.price_eur else 0.0
+            fee = t.fee_eur if t.fee_eur is not None and t.fee_eur == t.fee_eur else 0.0
+            notional = qty * price
             if t.side == Side.BUY.value:
-                cash -= notional + t.fee_eur
+                cash -= notional + fee
             else:
-                cash += notional - t.fee_eur
+                cash += notional - fee
         return cash
 
     @staticmethod

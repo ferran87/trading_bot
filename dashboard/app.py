@@ -149,6 +149,13 @@ def _infer_strategy_selection(bots_for_mode: pd.DataFrame) -> str:
     return "🔀  Tots dos"
 
 
+def _fmt_pct(v: float, decimals: int = 2) -> str:
+    """Format a ratio as a signed percentage string, returning '—' for NaN/None."""
+    if v is None or (v != v):  # NaN check without importing math
+        return "—"
+    return f"{v * 100:+.{decimals}f}%"
+
+
 def _x_axis_dtick(date_range_days: int) -> tuple[str, str]:
     if date_range_days <= 30:
         return "D1", "%d %b"
@@ -195,17 +202,21 @@ def _kpi(
     return kpi
 
 
+def _nansum(vals) -> float:
+    return sum(v for v in vals if v == v and v is not None)
+
+
 def _combined_kpis(bots_subset: pd.DataFrame, kpis: dict[int, dict],
                    initial_total: float,
                    live_pnls: dict[int, dict] | None = None) -> dict:
-    total    = sum(k["total_eur"]    for k in kpis.values())
-    cash     = sum(k["cash_eur"]     for k in kpis.values())
-    invested = sum(k["invested_eur"] for k in kpis.values())
-    fees     = sum(k["fees_eur"]     for k in kpis.values())
-    trades   = sum(k["n_trades"]     for k in kpis.values())
+    total    = _nansum(k["total_eur"]    for k in kpis.values())
+    cash     = _nansum(k["cash_eur"]     for k in kpis.values())
+    invested = _nansum(k["invested_eur"] for k in kpis.values())
+    fees     = _nansum(k["fees_eur"]     for k in kpis.values())
+    trades   = sum(k["n_trades"]         for k in kpis.values())
     ret      = total / initial_total - 1.0 if initial_total else 0.0
     max_dd   = min(k["max_dd"] for k in kpis.values()) if kpis else 0.0
-    unrealized = sum(v["unrealized_pnl_eur"] for v in (live_pnls or {}).values())
+    unrealized = _nansum(v["unrealized_pnl_eur"] for v in (live_pnls or {}).values())
     realized   = (total - initial_total) - unrealized
     return {
         "total_eur": total, "cash_eur": cash, "invested_eur": invested,
@@ -247,13 +258,17 @@ def _compute_live_pnl_per_bot(
         unrealized   = 0.0
         live_invested = 0.0
         for _, p in bot_pos.iterrows():
+            qty  = p["quantitat"]
+            cost = p["cost_eur"]
+            if pd.isna(qty) or pd.isna(cost):
+                continue
             px = live_prices.get(p["ticker"])
-            if px:
-                live_val      = px * p["quantitat"]
+            if px and px == px:  # truthy and not NaN
+                live_val      = px * qty
                 live_invested += live_val
-                unrealized    += live_val - p["cost_eur"]
+                unrealized    += live_val - cost
             else:
-                live_invested += p["cost_eur"]  # fallback: price unavailable
+                live_invested += cost  # fallback: price unavailable
         result[bot_id] = {
             "unrealized_pnl_eur": unrealized,
             "live_invested_eur":  live_invested,
@@ -337,19 +352,19 @@ def _render_combined_header(bots_subset: pd.DataFrame, kpis: dict[int, dict],
         st.markdown("#### 🔀 Cartera combinada")
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Patrimoni total",   f"€{ck['total_eur']:,.0f}",
-                  f"{ck['return_pct']*100:+.2f}%", delta_color=ret_color)
+                  _fmt_pct(ck['return_pct']), delta_color=ret_color)
         c2.metric("Capital aportat",   f"€{initial_total:,.0f}")
         c3.metric("Guany / Pèrdua",    f"€{total_pl:+,.0f}")
         c4.metric("Comissions totals", f"€{ck['fees_eur']:,.2f}")
 
         c5, c6, c7, c8 = st.columns(4)
-        unrl_pct = f"{ck['unrealized_pnl_eur'] / initial_total * 100:+.1f}%" if initial_total else "—"
-        rlzd_pct = f"{ck['realized_pnl_eur']   / initial_total * 100:+.1f}%" if initial_total else "—"
+        unrl_pct = _fmt_pct(ck['unrealized_pnl_eur'] / initial_total, 1) if initial_total else "—"
+        rlzd_pct = _fmt_pct(ck['realized_pnl_eur']   / initial_total, 1) if initial_total else "—"
         c5.metric("No realitzat",     f"€{ck['unrealized_pnl_eur']:+,.2f}",
                   unrl_pct, delta_color=unrl_color)
         c6.metric("Realitzat",        f"€{ck['realized_pnl_eur']:+,.2f}",
                   rlzd_pct, delta_color=rlzd_color)
-        c7.metric("Màxima caiguda",   f"{ck['max_dd']*100:.1f}%")
+        c7.metric("Màxima caiguda",   f"{ck['max_dd']*100:.1f}%" if ck['max_dd'] == ck['max_dd'] else "—")
         c8.metric("Total operacions", ck["n_trades"])
         if ck["total_eur"] < floor * len(bots_subset):
             st.error("⚠ Patrimoni combinat per sota del mínim")
@@ -382,14 +397,14 @@ def _render_bot_card(bot: pd.Series, kpi: dict, floor: float, mode: str,
         # Row 1 — portfolio summary
         c1, c2, c3 = st.columns(3)
         c1.metric("Patrimoni", f"€{kpi['total_eur']:,.2f}",
-                  f"{kpi['return_pct']*100:+.2f}%", delta_color=ret_color)
+                  _fmt_pct(kpi['return_pct']), delta_color=ret_color)
         c2.metric("Efectiu",   f"€{kpi['cash_eur']:,.2f}")
         c3.metric("Invertit",  f"€{kpi['invested_eur']:,.2f}")
 
         # Row 2 — P&L breakdown
         c4, c5, c6 = st.columns(3)
-        unrl_pct = f"{unrealized / initial * 100:+.1f}%" if initial else "—"
-        rlzd_pct = f"{realized   / initial * 100:+.1f}%" if initial else "—"
+        unrl_pct = _fmt_pct(unrealized / initial, 1) if initial else "—"
+        rlzd_pct = _fmt_pct(realized   / initial, 1) if initial else "—"
         c4.metric("No realitzat", f"€{unrealized:+,.2f}", unrl_pct, delta_color=unrl_color)
         c5.metric("Realitzat",    f"€{realized:+,.2f}",   rlzd_pct, delta_color=rlzd_color)
         c6.metric("Comissions",   f"€{kpi['fees_eur']:,.2f}")
@@ -398,7 +413,7 @@ def _render_bot_card(bot: pd.Series, kpi: dict, floor: float, mode: str,
         c7, c8, c9 = st.columns(3)
         c7.metric("Sharpe (anual.)",
                   "—" if pd.isna(kpi["sharpe"]) else f"{kpi['sharpe']:.2f}")
-        c8.metric("Màxima caiguda", f"{kpi['max_dd']*100:.1f}%")
+        c8.metric("Màxima caiguda", f"{kpi['max_dd']*100:.1f}%" if kpi['max_dd'] == kpi['max_dd'] else "—")
         c9.metric("Operacions", kpi["n_trades"])
 
         if kpi["total_eur"] < floor:
@@ -490,9 +505,12 @@ def _render_positions(
     for _, p in active.iterrows():
         px        = live_prices.get(p["ticker"])
         cost      = p["cost_eur"]
-        valor     = round(px * p["quantitat"], 2) if px else None
-        pl_eur    = round(valor - cost, 2) if valor else None
-        guany_pct = f"{(valor / cost - 1) * 100:+.1f}%" if valor and cost > 0 else "—"
+        qty       = p["quantitat"]
+        _qty_ok   = qty is not None and qty == qty  # pandas stores None as float NaN
+        _px_ok    = px is not None and px == px
+        valor     = round(px * qty, 2) if _px_ok and _qty_ok else None
+        pl_eur    = round(valor - cost, 2) if valor is not None and cost is not None else None
+        guany_pct = f"{(valor / cost - 1) * 100:+.1f}%" if valor is not None and cost and cost > 0 else "—"
         dies      = (today_date - p["data_entrada"]).days if p["data_entrada"] else "—"
         bot_row   = bots_subset.loc[bots_subset["id"] == p["bot_id"]]
         owner     = bots_subset.loc[bots_subset["id"] == p["bot_id"], "owner"].values
@@ -505,10 +523,10 @@ def _render_positions(
             "ticker":       p["ticker"],
             "data entrada": p["data_entrada"],
             "dies":         dies,
-            "preu entrada": f"€{p['preu_entrada_eur']:,.2f}",
-            "preu actual":  f"€{px:,.2f}" if px else "—",
-            "cost":         f"€{cost:,.2f}",
-            "valor actual": f"€{valor:,.2f}" if valor else "—",
+            "preu entrada": f"€{p['preu_entrada_eur']:,.2f}" if p['preu_entrada_eur'] is not None else "—",
+            "preu actual":  f"€{px:,.2f}" if _px_ok else "—",
+            "cost":         f"€{cost:,.2f}" if cost is not None else "—",
+            "valor actual": f"€{valor:,.2f}" if valor is not None else "—",
             "guany %":      guany_pct,
             "P&L €":        f"€{pl_eur:+,.2f}" if pl_eur is not None else "—",
         })

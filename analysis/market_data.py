@@ -29,7 +29,13 @@ class Bars:
     df: pd.DataFrame
 
     def last_close(self) -> float:
-        return float(self.df["close"].iloc[-1])
+        """Return the last non-NaN close. yfinance appends today's partial bar
+        (NaN close) before market open — dropna() skips it and returns the
+        last completed session's close instead."""
+        valid = self.df["close"].dropna()
+        if valid.empty:
+            return float("nan")
+        return float(valid.iloc[-1])
 
     def last_date(self) -> date:
         return self.df.index[-1].date()
@@ -227,7 +233,11 @@ def last_prices_eur(bars_by_ticker: dict[str, Bars]) -> dict[str, float]:
                     "applying fallback rate %.4f", ticker, ccy, e, fallback,
                 )
                 close = close * fallback
-        out[ticker] = close
+        import math as _math
+        if _math.isfinite(close):
+            out[ticker] = close
+        else:
+            log.warning("market_data: last_close for %s is not finite (%r) — omitting", ticker, close)
     return out
 
 

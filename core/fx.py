@@ -90,14 +90,17 @@ def _fetch_rate(currency: str, as_of: date | None) -> float:
                 _CACHE[(currency, d)] = 1.0 / float(val)
 
         cutoff = pd.Timestamp(as_of).tz_localize(None)
-        subset = close_col[close_col.index <= cutoff]
+        subset = close_col[close_col.index <= cutoff].dropna()
         if subset.empty:
             raise RuntimeError(f"No FX data for {pair} on or before {as_of}")
         foreign_per_eur = float(subset.iloc[-1])
     else:
-        foreign_per_eur = float(close_col.iloc[-1])
+        valid = close_col.dropna()
+        if valid.empty:
+            raise RuntimeError(f"No valid FX close for {pair}")
+        foreign_per_eur = float(valid.iloc[-1])
 
-    if foreign_per_eur <= 0:
+    if foreign_per_eur <= 0 or foreign_per_eur != foreign_per_eur:
         raise RuntimeError(f"Invalid FX close for {pair}: {foreign_per_eur}")
     return 1.0 / foreign_per_eur
 
