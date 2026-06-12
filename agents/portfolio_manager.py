@@ -372,11 +372,26 @@ def run_daily_review(is_sunday: bool = False) -> dict:
         is_sunday, today,
     )
 
+    # Hybrid model selection:
+    #   - Sunday scan creates new theses (3+ month commitments) — use Opus 4.8
+    #     for the strongest long-horizon reasoning over the fundamentals →
+    #     analyst targets → 8-K filings tool chain.
+    #   - Daily reviews just re-grade existing theses against fresh data —
+    #     Sonnet 4.6 is plenty and ~1.67× cheaper.
+    # Effort: Sunday gets "high" (default on 4.8) for new thesis quality;
+    # daily gets "medium" to cap cost on the cheap path.
+    if is_sunday:
+        model = "claude-opus-4-8"
+        effort = "high"
+    else:
+        model = "claude-sonnet-4-6"
+        effort = "medium"
+
     # Shared agent loop handles iteration, prompt-caching, tool dispatch.
     from agents._loop import run_tool_loop
     loop_result = run_tool_loop(
         client,
-        model="claude-sonnet-4-5",
+        model=model,
         system_prompt=_SYSTEM_PROMPT,
         tools=TOOL_DEFINITIONS,
         initial_user_message=task_description,
@@ -386,6 +401,7 @@ def run_daily_review(is_sunday: bool = False) -> dict:
         cache_prompt=True,
         log_prefix="portfolio_manager",
         log=log,
+        effort=effort,
     )
     iteration  = loop_result["iterations"]
     final_text = loop_result["final_text"]

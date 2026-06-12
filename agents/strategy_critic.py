@@ -382,7 +382,7 @@ def run_critic_for_strategy(strategy: str, *, max_iterations: int = 30) -> dict:
     from agents._loop import run_tool_loop
     loop_result = run_tool_loop(
         client,
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         system_prompt=_SYSTEM_PROMPT,
         tools=TOOL_DEFINITIONS,
         initial_user_message=user_message,
@@ -393,6 +393,7 @@ def run_critic_for_strategy(strategy: str, *, max_iterations: int = 30) -> dict:
         on_tool_result=_track_submit,
         log_prefix=f"strategy_critic[{strategy}]",
         log=log,
+        effort="medium",
     )
 
     summary: dict = {

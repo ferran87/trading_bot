@@ -320,7 +320,7 @@ def explain_trades(
     from agents._loop import run_tool_loop
     result = run_tool_loop(
         client,
-        model="claude-sonnet-4-5",  # Sonnet: better Catalan quality; runs once/day
+        model="claude-sonnet-4-6",  # Sonnet 4.6: better Catalan quality; runs once/day
         system_prompt=system_prompt,
         tools=TOOL_DEFINITIONS,
         initial_user_message=user_message,
@@ -330,6 +330,7 @@ def explain_trades(
         cache_prompt=False,  # trade_explainer rebuilds prompt per call (per-strategy)
         log_prefix="trade_explainer",
         log=log,
+        effort="low",  # short Catalan run-log prose, no deep reasoning needed
     )
     return result["final_text"]
     return ""

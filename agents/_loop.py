@@ -58,6 +58,7 @@ def run_tool_loop(
     log_prefix: str = "agent",
     log: logging.Logger | None = None,
     swallow_api_errors: bool = False,
+    effort: str | None = None,
 ) -> dict[str, Any]:
     """Run a Claude tool-use loop until ``end_turn`` or ``max_iterations``.
 
@@ -127,6 +128,14 @@ def run_tool_loop(
     stop_reason: str | None = None
     completed = False
 
+    # Sonnet 4.6 / Opus 4.6+ accept output_config.effort (low/medium/high/max
+    # — max is Opus-tier only). Default on 4.6 is "high", which is more
+    # expensive than what 4.5 was doing implicitly. Callers pass an explicit
+    # effort to cap cost / steer depth.
+    create_kwargs: dict[str, Any] = {}
+    if effort is not None:
+        create_kwargs["output_config"] = {"effort": effort}
+
     for iteration in range(1, max_iterations + 1):
         try:
             response = client.messages.create(
@@ -135,6 +144,7 @@ def run_tool_loop(
                 system=cached_system,
                 tools=cached_tools,
                 messages=messages,
+                **create_kwargs,
             )
         except anthropic.APIError as e:
             if not swallow_api_errors:

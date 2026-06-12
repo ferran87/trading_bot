@@ -178,7 +178,7 @@ def _run_strategist_loop(mode: str) -> dict:
     from agents._loop import run_tool_loop
     loop_result = run_tool_loop(
         client,
-        model="claude-sonnet-4-5",
+        model="claude-sonnet-4-6",
         system_prompt=_SYSTEM_PROMPT,
         tools=TOOL_DEFINITIONS,
         initial_user_message=task_description,
@@ -189,6 +189,7 @@ def _run_strategist_loop(mode: str) -> dict:
         log_prefix="strategist",
         log=log,
         swallow_api_errors=True,
+        effort="medium",
     )
     iteration  = loop_result["iterations"]
     final_text = loop_result["final_text"]
