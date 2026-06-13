@@ -488,7 +488,19 @@ _SessionLocal: sessionmaker[Session] | None = None
 def engine():
     global _engine
     if _engine is None:
-        _engine = create_engine(CONFIG.db_url, future=True)
+        url = CONFIG.db_url
+        kwargs: dict = {"future": True}
+        if url.startswith("postgres"):
+            # Supabase's pooler closes idle connections. Without these, a long
+            # run (e.g. the Strategy Critic's many backtests, which leave gaps
+            # between queries) eventually checks out a dead pooled connection
+            # and throws "server closed the connection unexpectedly", crashing
+            # the run before any proposal is submitted.
+            #   pool_pre_ping: test liveness on checkout, reconnect if dead.
+            #   pool_recycle:  drop connections older than 300s (< idle timeout).
+            kwargs["pool_pre_ping"] = True
+            kwargs["pool_recycle"] = 300
+        _engine = create_engine(url, **kwargs)
         Base.metadata.create_all(_engine)  # idempotent — creates missing tables on first use
         _migrate(_engine)
     return _engine

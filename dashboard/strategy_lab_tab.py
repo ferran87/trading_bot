@@ -362,14 +362,29 @@ def _render_run_button(*, is_admin: bool = False) -> None:
         script = PROJECT_ROOT / "scripts" / "run_strategy_critic.py"
         venv_python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
         python_exe = str(venv_python) if venv_python.exists() else sys.executable
+        # Append the run's output to the same log the scheduled task uses, so a
+        # crash (e.g. a DB connection drop) is diagnosable instead of silently
+        # swallowed by DEVNULL — which made failed runs look like "no proposal".
+        log_path = PROJECT_ROOT / "data" / "logs" / "strategy_critic.log"
         try:
-            subprocess.Popen(
-                [python_exe, str(script)],
-                cwd=str(PROJECT_ROOT),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_fh = open(log_path, "a", encoding="utf-8")
+            try:
+                subprocess.Popen(
+                    [python_exe, str(script)],
+                    cwd=str(PROJECT_ROOT),
+                    stdout=log_fh,
+                    stderr=subprocess.STDOUT,
+                )
+            finally:
+                # The child keeps its own duplicated fd; closing the parent's
+                # handle avoids leaking one per click.
+                log_fh.close()
+            st.info(
+                "L'agent crític està executant-se en segon pla. Recarrega la "
+                "pàgina d'aquí a 1-2 minuts.  \n"
+                f"Sortida i errors: `{log_path.relative_to(PROJECT_ROOT)}`"
             )
-            st.info("L'agent crític està executant-se en segon pla. Recarrega la pàgina d'aquí a 1-2 minuts.")
         except Exception as exc:
             st.error(f"No s'ha pogut iniciar l'agent: {exc}")
 
