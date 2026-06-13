@@ -31,6 +31,7 @@ from core.db import RuleProposal, get_session
 from agents.critic_tools import (
     BOUNDED_RANGES,
     MAX_PROPOSALS_PER_STRATEGY,
+    clear_backtest_cache,
     compute_ratchet,
     get_proposal_track_record,
     get_real_closed_positions,
@@ -381,6 +382,10 @@ def run_critic_for_strategy(strategy: str, *, max_iterations: int = 30) -> dict:
     """
     if strategy not in ("rsi_compounder", "trend_momentum"):
         raise ValueError(f"unknown strategy: {strategy}")
+
+    # Fresh cache each run so we never serve a backtest stale w.r.t. changed
+    # YAML params or refreshed market data; baselines are reused within the run.
+    clear_backtest_cache()
 
     client = anthropic.Anthropic()  # reads ANTHROPIC_API_KEY
 

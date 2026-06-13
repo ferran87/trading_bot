@@ -113,6 +113,54 @@ MAX_PROPOSALS_PER_STRATEGY = 3
 RATCHET_MAX_DD_SLACK_PP = 0.02
 
 
+# Anchor for the critic's backtest/walk-forward window. Shorter window = faster
+# runs (each backtest replays day-by-day from this date). Tradeoff: a tighter
+# 70/30 walk-forward split and fewer in-window trades make validation noisier —
+# revert to date(2024, 1, 1) if proposals start looking flimsy.
+CRITIC_BACKTEST_START = date(2025, 1, 1)
+
+
+# ── Per-run backtest cache ──────────────────────────────────────────────────
+#
+# The critic evaluates each hypothesis with simulate_param_change +
+# walk_forward_validate, and the BASELINE backtest (no override) is identical
+# across every hypothesis for a strategy — yet was recomputed each time, and
+# each run_backtest re-downloads the whole universe (it calls
+# market_data.clear_cache() internally). Memoising by (bot_id, start, end,
+# overrides) eliminates that waste. Scoped to one critic run: clear_backtest_cache()
+# is called at the start of run_critic_for_strategy so we never serve a result
+# stale w.r.t. changed YAML params or refreshed market data across runs.
+
+_BACKTEST_CACHE: dict[tuple, BacktestResult] = {}
+
+
+def clear_backtest_cache() -> None:
+    """Drop all memoised backtests. Call once at the start of each critic run."""
+    _BACKTEST_CACHE.clear()
+
+
+def _cached_run_backtest(
+    bot_id: int,
+    start: date,
+    end: date,
+    params_override: dict | None = None,
+) -> BacktestResult:
+    """run_backtest() with per-run memoization. Falls back to a direct call if
+    the override isn't hashable (e.g. a nested regime_overrides dict)."""
+    try:
+        key = (
+            bot_id, start.isoformat(), end.isoformat(),
+            tuple(sorted((params_override or {}).items())),
+        )
+        hit = _BACKTEST_CACHE.get(key)  # hashing the key happens here
+    except TypeError:
+        return run_backtest(bot_id, start, end, params_override=params_override)
+    if hit is None:
+        hit = run_backtest(bot_id, start, end, params_override=params_override)
+        _BACKTEST_CACHE[key] = hit
+    return hit
+
+
 @dataclass
 class BacktestSummary:
     """Light JSON-serialisable view of a BacktestResult — what Claude sees."""
@@ -326,14 +374,14 @@ def simulate_param_change(
     if invalid:
         return json.dumps({"error": "invalid overrides", "details": invalid})
 
-    s_date = date.fromisoformat(start) if start else date(2024, 1, 1)
+    s_date = date.fromisoformat(start) if start else CRITIC_BACKTEST_START
     e_date = date.fromisoformat(end)   if end   else date.today()
 
     log.info("simulate_param_change(%s) baseline...", strategy)
-    base = _summarise(run_backtest(bot_id, s_date, e_date), period_label=f"{s_date}→{e_date}")
+    base = _summarise(_cached_run_backtest(bot_id, s_date, e_date), period_label=f"{s_date}→{e_date}")
     log.info("simulate_param_change(%s) proposed %s...", strategy, param_overrides)
     prop = _summarise(
-        run_backtest(bot_id, s_date, e_date, params_override=param_overrides),
+        _cached_run_backtest(bot_id, s_date, e_date, params_override=param_overrides),
         period_label=f"{s_date}→{e_date}",
     )
 
@@ -374,7 +422,7 @@ def walk_forward_validate(
     if invalid:
         return json.dumps({"error": "invalid overrides", "details": invalid})
 
-    full_start = date(2024, 1, 1)
+    full_start = CRITIC_BACKTEST_START
     full_end   = date.today()
     total_days = (full_end - full_start).days
     split_day  = full_start + timedelta(days=int(total_days * train_pct))
@@ -383,19 +431,19 @@ def walk_forward_validate(
              strategy, full_start, split_day, split_day, full_end)
 
     train_baseline = _summarise(
-        run_backtest(bot_id, full_start, split_day),
+        _cached_run_backtest(bot_id, full_start, split_day),
         period_label=f"train {full_start}→{split_day}",
     )
     train_proposed = _summarise(
-        run_backtest(bot_id, full_start, split_day, params_override=param_overrides),
+        _cached_run_backtest(bot_id, full_start, split_day, params_override=param_overrides),
         period_label=f"train {full_start}→{split_day}",
     )
     test_baseline = _summarise(
-        run_backtest(bot_id, split_day, full_end),
+        _cached_run_backtest(bot_id, split_day, full_end),
         period_label=f"test {split_day}→{full_end}",
     )
     test_proposed = _summarise(
-        run_backtest(bot_id, split_day, full_end, params_override=param_overrides),
+        _cached_run_backtest(bot_id, split_day, full_end, params_override=param_overrides),
         period_label=f"test {split_day}→{full_end}",
     )
 
