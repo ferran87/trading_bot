@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import logging
 import subprocess
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -352,41 +351,78 @@ def _render_proposal_card(row: pd.Series, *, is_admin: bool = False) -> None:
         st.caption(f"Proposta #{row['id']} — creada {row['created_at']:%Y-%m-%d %H:%M}")
 
 
+def _latest_proposal_date() -> str:
+    """Date (YYYY-MM-DD) of the most recent critic proposal, or 'mai' if none.
+
+    Read from the shared DB, so it reflects the last time the critic produced
+    output regardless of which machine triggered the run.
+    """
+    with get_session() as s:
+        latest = (
+            s.query(RuleProposal)
+            .order_by(RuleProposal.created_at.desc())
+            .first()
+        )
+    return latest.created_at.strftime("%Y-%m-%d") if latest else "mai"
+
+
 def _render_run_button(*, is_admin: bool = False) -> None:
-    """Manual trigger to invoke the critic agent in a background subprocess."""
+    """Manual trigger to invoke the critic agent in a background subprocess.
+
+    The critic only runs on the LOCAL machine — it needs the project venv, the
+    ANTHROPIC_API_KEY, and the compute/time for many backtests. On Streamlit
+    Cloud none of that holds, so a spawned subprocess dies silently without
+    producing a proposal. We detect that (no project venv present) and tell the
+    user to run it locally instead of launching a doomed process.
+    """
     if not is_admin:
         return
-    if st.button("▶️ Executar revisió ara", help="Llança l'agent crític per a totes les estratègies"):
-        # Fire-and-forget subprocess. The dashboard remains responsive; the
-        # user refreshes the page to see new proposals appear.
-        script = PROJECT_ROOT / "scripts" / "run_strategy_critic.py"
-        venv_python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
-        python_exe = str(venv_python) if venv_python.exists() else sys.executable
-        # Append the run's output to the same log the scheduled task uses, so a
-        # crash (e.g. a DB connection drop) is diagnosable instead of silently
-        # swallowed by DEVNULL — which made failed runs look like "no proposal".
-        log_path = PROJECT_ROOT / "data" / "logs" / "strategy_critic.log"
+    if not st.button("▶️ Executar revisió ara", help="Llança l'agent crític per a totes les estratègies"):
+        return
+
+    last_str = _latest_proposal_date()
+    venv_python = PROJECT_ROOT / ".venv" / "Scripts" / "python.exe"
+
+    if not venv_python.exists():
+        # Not the local machine (e.g. Streamlit Cloud): the critic can't run here.
+        st.warning(
+            "⚠️ El crític **no s'executa aquí**. Aquest entorn (p. ex. Streamlit "
+            "Cloud) no té l'entorn del projecte, la clau d'API ni els recursos "
+            "per a una execució llarga de backtests, així que el procés moriria "
+            "en silenci sense generar cap proposta.  \n"
+            "Executa'l al **portàtil** (dashboard local a `localhost:8511`) o "
+            "espera la tasca programada setmanal.  \n"
+            f"📅 Última proposta generada pel crític: **{last_str}**."
+        )
+        return
+
+    # Local machine: launch the fire-and-forget subprocess. Output goes to the
+    # same log the scheduled task uses, so a crash (e.g. a DB connection drop)
+    # is diagnosable instead of silently swallowed.
+    script = PROJECT_ROOT / "scripts" / "run_strategy_critic.py"
+    log_path = PROJECT_ROOT / "data" / "logs" / "strategy_critic.log"
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_fh = open(log_path, "a", encoding="utf-8")
         try:
-            log_path.parent.mkdir(parents=True, exist_ok=True)
-            log_fh = open(log_path, "a", encoding="utf-8")
-            try:
-                subprocess.Popen(
-                    [python_exe, str(script)],
-                    cwd=str(PROJECT_ROOT),
-                    stdout=log_fh,
-                    stderr=subprocess.STDOUT,
-                )
-            finally:
-                # The child keeps its own duplicated fd; closing the parent's
-                # handle avoids leaking one per click.
-                log_fh.close()
-            st.info(
-                "L'agent crític està executant-se en segon pla. Recarrega la "
-                "pàgina d'aquí a 1-2 minuts.  \n"
-                f"Sortida i errors: `{log_path.relative_to(PROJECT_ROOT)}`"
+            subprocess.Popen(
+                [str(venv_python), str(script)],
+                cwd=str(PROJECT_ROOT),
+                stdout=log_fh,
+                stderr=subprocess.STDOUT,
             )
-        except Exception as exc:
-            st.error(f"No s'ha pogut iniciar l'agent: {exc}")
+        finally:
+            # The child keeps its own duplicated fd; closing the parent's
+            # handle avoids leaking one per click.
+            log_fh.close()
+        st.info(
+            "L'agent crític està executant-se en segon pla. Recarrega la "
+            "pàgina d'aquí a 1-2 minuts.  \n"
+            f"📅 Última proposta abans d'aquesta execució: **{last_str}**.  \n"
+            f"Sortida i errors: `{log_path.relative_to(PROJECT_ROOT)}`"
+        )
+    except Exception as exc:
+        st.error(f"No s'ha pogut iniciar l'agent: {exc}")
 
 
 def _render_history(history: pd.DataFrame) -> None:
