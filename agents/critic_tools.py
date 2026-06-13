@@ -31,6 +31,7 @@ from backtesting.engine import BacktestResult, run_backtest
 from core.config import CONFIG
 from core.db import (
     Bot,
+    RuleChangeLog,
     SimulatedClosedPosition,
     Trade,
     get_session,
@@ -456,3 +457,133 @@ def compute_ratchet(baseline: dict, proposed: dict) -> bool:
         return bool(ret_better and dd_ok)
     except (KeyError, TypeError):
         return False
+
+
+# ── Track-record measurement (closes the learning loop) ─────────────────────
+#
+# After a parameter change is approved + applied, we want to know whether it
+# actually helped on data the critic had NOT seen at proposal time. Naive "bot
+# equity N days later" is confounded by market regime and by other param
+# changes in the same window, so instead we run a FORWARD COUNTERFACTUAL:
+# backtest the realized window [applied_at, applied_at + N days] twice — once
+# with the param at its old value, once at its new value, everything else at
+# current YAML — and take the return delta. This is walk-forward validation on
+# real elapsed calendar time, isolating the single parameter.
+
+
+def measure_change_forward_delta(
+    strategy: str,
+    param_name: str,
+    old_value: float,
+    new_value: float,
+    applied_at: date,
+    window_days: int,
+    *,
+    today: date | None = None,
+) -> float | None:
+    """Forward counterfactual return delta for one applied param change.
+
+    Returns ``proposed_return_pct - baseline_return_pct`` over the realized
+    window ``[applied_at, applied_at + window_days]``, where baseline reverts
+    the single param to ``old_value`` and proposed sets it to ``new_value``
+    (everything else from current YAML).
+
+    Returns ``None`` if the window has not fully elapsed yet, the strategy is
+    unknown, or the param is frozen (not tunable) — i.e. nothing to measure.
+    """
+    today = today or date.today()
+    bot_id = STRATEGY_BOTS.get(strategy)
+    if bot_id is None:
+        return None
+    if param_name not in BOUNDED_RANGES:
+        # Param was frozen after the change; we cannot override it anymore.
+        return None
+
+    start = applied_at
+    end = applied_at + timedelta(days=window_days)
+    if end > today:
+        return None  # window not fully elapsed — caller should retry later
+
+    baseline = _summarise(
+        run_backtest(bot_id, start, end, params_override={param_name: float(old_value)}),
+        period_label=f"fwd-baseline {start}→{end}",
+    )
+    proposed = _summarise(
+        run_backtest(bot_id, start, end, params_override={param_name: float(new_value)}),
+        period_label=f"fwd-proposed {start}→{end}",
+    )
+    return round(proposed.return_pct - baseline.return_pct, 4)
+
+
+# ── Tool 6: get_proposal_track_record ──────────────────────────────────────
+
+def get_proposal_track_record(strategy: str) -> str:
+    """Return the critic's own batting average for a strategy as JSON.
+
+    Reads measured forward deltas from ``RuleChangeLog`` (filled in by
+    ``scripts/measure_rule_changes.py``). Groups by ``param_name`` so the
+    critic can see which knobs its past changes helped vs hurt and calibrate
+    accordingly. Only rows with a measured 30-day delta are counted.
+    """
+    with get_session() as s:
+        rows = (
+            s.query(RuleChangeLog)
+            .filter(RuleChangeLog.strategy == strategy)
+            .order_by(RuleChangeLog.applied_at.desc())
+            .all()
+        )
+
+    per_param: dict[str, dict] = {}
+    changes: list[dict] = []
+    for r in rows:
+        d30 = r.pnl_30d_after
+        d90 = r.pnl_90d_after
+        changes.append({
+            "param_name":    r.param_name,
+            "old_value":     r.old_value,
+            "new_value":     r.new_value,
+            "applied_at":    r.applied_at.date().isoformat() if r.applied_at else None,
+            "fwd_delta_30d": d30,
+            "fwd_delta_90d": d90,
+        })
+        if d30 is None:
+            continue  # not yet measured — exclude from batting average
+        agg = per_param.setdefault(
+            r.param_name,
+            {"n_measured": 0, "n_positive": 0, "sum_delta_30d": 0.0,
+             "sum_delta_90d": 0.0, "n_delta_90d": 0},
+        )
+        agg["n_measured"] += 1
+        if d30 > 0:
+            agg["n_positive"] += 1
+        agg["sum_delta_30d"] += d30
+        if d90 is not None:
+            agg["sum_delta_90d"] += d90
+            agg["n_delta_90d"] += 1
+
+    summary: dict[str, dict] = {}
+    total_measured = 0
+    total_positive = 0
+    for name, agg in per_param.items():
+        n = agg["n_measured"]
+        total_measured += n
+        total_positive += agg["n_positive"]
+        summary[name] = {
+            "n_measured":         n,
+            "batting_average":    round(agg["n_positive"] / n, 3) if n else None,
+            "mean_fwd_delta_30d": round(agg["sum_delta_30d"] / n, 4) if n else None,
+            "mean_fwd_delta_90d": (
+                round(agg["sum_delta_90d"] / agg["n_delta_90d"], 4)
+                if agg["n_delta_90d"] else None
+            ),
+        }
+
+    overall_ba = round(total_positive / total_measured, 3) if total_measured else None
+    return json.dumps({
+        "strategy":          strategy,
+        "n_changes_total":   len(changes),
+        "n_measured":        total_measured,
+        "overall_batting_average": overall_ba,
+        "per_param":         summary,
+        "changes":           changes,
+    })

@@ -32,6 +32,7 @@ from agents.critic_tools import (
     BOUNDED_RANGES,
     MAX_PROPOSALS_PER_STRATEGY,
     compute_ratchet,
+    get_proposal_track_record,
     get_real_closed_positions,
     get_simulated_closed_positions,
     get_strategy_params,
@@ -93,6 +94,25 @@ TOOL_DEFINITIONS: list[dict] = [
             "Returns the current numeric parameters of a strategy along with "
             "which ones are tunable (within what bounds) versus frozen. "
             "Call this BEFORE proposing any change so you know what's allowed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "strategy": {"type": "string", "enum": ["rsi_compounder", "trend_momentum"]},
+            },
+            "required": ["strategy"],
+        },
+    },
+    {
+        "name": "get_proposal_track_record",
+        "description": (
+            "Returns YOUR OWN batting average for this strategy: for each "
+            "parameter you have changed in the past, the measured FORWARD return "
+            "delta (how the change actually performed on data you had not seen "
+            "when you proposed it), plus how often it helped. Call this FIRST, "
+            "before proposing anything — if your past changes to a parameter had "
+            "negative forward deltas, be skeptical of touching it again without "
+            "a genuinely new causal hypothesis. Empty early on (few changes yet)."
         ),
         "input_schema": {
             "type": "object",
@@ -209,11 +229,19 @@ ajustat al risc.
    dolenta.
 
 ── PROCEDIMENT TÍPIC ──────────────────────────────────────────────────────
-1. get_simulated_closed_positions(strategy) — entendre l'historial.
-2. get_strategy_params(strategy) — saber quins paràmetres pots tocar.
-3. Identificar 1-3 hipòtesis (e.g., "els trailing stops del 35% deixen córrer
-   massa caigudes en règim BULL — un 25% capturaria el guany abans").
-4. Per cada hipòtesi:
+1. get_proposal_track_record(strategy) — PRIMER DE TOT. Mira el teu propi
+   historial: per a cada paràmetre que ja has tocat, quin va ser el delta de
+   rendiment REAL cap endavant (sobre dades que no havies vist quan ho vas
+   proposar). Si els teus últims canvis d'un paràmetre (p.ex. trail_pct) han
+   donat deltes negatius, NO insisteixis a tornar-lo a tocar tret que tinguis
+   una hipòtesi causal genuïnament nova. Prioritza els paràmetres on tens bon
+   "batting average" o que encara no has provat. Al principi estarà buit.
+2. get_simulated_closed_positions(strategy) — entendre l'historial.
+3. get_strategy_params(strategy) — saber quins paràmetres pots tocar.
+4. Identificar 1-3 hipòtesis (e.g., "els trailing stops del 35% deixen córrer
+   massa caigudes en règim BULL — un 25% capturaria el guany abans"),
+   ponderades pel teu track record del pas 1.
+5. Per cada hipòtesi:
    a. simulate_param_change per veure l'impacte global.
    b. walk_forward_validate per assegurar que la millora generalitza.
    c. Si passa el ratchet i NO està sobreajustada → submit_proposal amb
@@ -250,6 +278,8 @@ def _dispatch(tool_name: str, tool_input: dict) -> str:
         )
     if tool_name == "get_strategy_params":
         return get_strategy_params(tool_input["strategy"])
+    if tool_name == "get_proposal_track_record":
+        return get_proposal_track_record(tool_input["strategy"])
     if tool_name == "simulate_param_change":
         return simulate_param_change(
             tool_input["strategy"],

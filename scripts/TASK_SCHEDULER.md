@@ -82,6 +82,45 @@ Get-Content "C:\Users\ferra\trading bot\data\logs\run_*.log" | Select-Object -La
 `LastTaskResult = 0` = success. Any non-zero value means the script
 itself crashed (venv missing, Gateway down, etc.) — check the log file.
 
+## Weekly learning-loop jobs
+
+Two slow-loop jobs run weekly to keep the Strategy Critic improving:
+
+- **`\StrategyCritic_Weekly`** — runs `run_critic_auto.bat`
+  (`scripts/run_strategy_critic.py`), which proposes parameter changes.
+- **`\RuleChangeTracker_Weekly`** — runs `run_rule_tracker_auto.bat`
+  (`scripts/measure_rule_changes.py`), which backfills the *forward* P&L delta
+  of each previously-applied change once its 30/90-day window has elapsed. This
+  is what closes the learning loop — the critic reads these deltas (its own
+  "batting average") before proposing again.
+
+**Order matters:** schedule the tracker a day *before* the critic so the freshly
+measured deltas are available when the critic next runs. Suggested: tracker
+Saturday 09:00, critic Sunday 09:30.
+
+```powershell
+# RuleChangeTracker — Saturdays 09:00 (run before the critic)
+$trackerAction = New-ScheduledTaskAction `
+    -Execute 'cmd.exe' `
+    -Argument '/c "C:\Users\ferra\trading bot\run_rule_tracker_auto.bat"'
+
+$trackerTrigger = New-ScheduledTaskTrigger -Weekly -WeeksInterval 1 `
+    -DaysOfWeek Saturday -At 09:00
+
+$trackerSettings = New-ScheduledTaskSettingsSet `
+    -StartWhenAvailable -DontStopIfGoingOnBatteries -AllowStartIfOnBatteries `
+    -ExecutionTimeLimit (New-TimeSpan -Minutes 60) `
+    -RestartCount 2 -RestartInterval (New-TimeSpan -Minutes 5)
+
+Register-ScheduledTask -TaskName 'RuleChangeTracker_Weekly' `
+    -Action $trackerAction -Trigger $trackerTrigger -Settings $trackerSettings `
+    -Description 'Backfill forward P&L deltas of applied param changes (learning-loop feedback)'
+```
+
+The job is idempotent: it only fills columns that are still NULL and whose
+window has fully elapsed, so re-running it is always safe. `LastTaskResult = 0`
+= success; check `data/logs/rule_tracker.log` for the per-change deltas.
+
 ## Timezone notes
 
 Windows Task Scheduler runs in **local time**. If your machine is set to
