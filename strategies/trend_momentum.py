@@ -109,6 +109,44 @@ def _sma(close: pd.Series, period: int) -> float | None:
     return float(close.iloc[-period:].mean())
 
 
+def _trend_entry_score(
+    close: pd.Series,
+    ticker: str,
+    today: datetime.date,
+    rsi_period: int,
+    rsi_entry_min: float,
+    rsi_entry_max: float,
+    rsi_mom_days: int,
+    sma_period: int,
+    min_history: int,
+    earnings_blackout: int,
+) -> float | None:
+    """Return an entry signal score, or None if any condition fails.
+
+    Score = rsi_entry_max - rsi_now: higher means deeper pullback with more
+    room to run. Mirrors the entry conditions checked in propose_orders.
+    """
+    if len(close) < min_history:
+        return None
+    sma50 = _sma(close, sma_period)
+    if sma50 is None or float(close.dropna().iloc[-1]) <= sma50:
+        return None
+    if len(close) < rsi_period + rsi_mom_days + 2:
+        return None
+    rsi_series = rsi(close, rsi_period)
+    rsi_now = float(rsi_series.iloc[-1])
+    if rsi_now != rsi_now:
+        return None
+    if not (rsi_entry_min <= rsi_now <= rsi_entry_max):
+        return None
+    rsi_n_ago = float(rsi_series.iloc[-rsi_mom_days - 1])
+    if rsi_n_ago != rsi_n_ago or rsi_now <= rsi_n_ago:
+        return None
+    if _has_earnings_soon(ticker, today, earnings_blackout):
+        return None
+    return rsi_entry_max - rsi_now
+
+
 def _consecutive_below_sma50(close: pd.Series, sma50: float) -> int:
     """Count trailing consecutive sessions where close < sma50."""
     count = 0
@@ -245,6 +283,50 @@ class TrendMomentumStrategy(Strategy):
         slots_available = max_concurrent - positions_after_exits
 
         if slots_available <= 0:
+            # --- Scale-in pass: at max capacity but cash available ------------
+            # Market filter already passed above (we'd have returned otherwise).
+            # Re-score held positions with the entry signal; add to the best one.
+            if ctx.at_max_positions:
+                best_score: float | None = None
+                best_ticker: str | None = None
+                best_price: float | None = None
+
+                for ticker, pos in snapshot.positions.items():
+                    if ticker in tickers_being_sold or ticker == market_ticker:
+                        continue
+                    bars = ctx.bars.get(ticker)
+                    if bars is None:
+                        continue
+                    price = ctx.prices_eur.get(ticker) or bars.last_close()
+                    if price is None or not math.isfinite(price) or price <= 0:
+                        continue
+                    score = _trend_entry_score(
+                        bars.df["close"], ticker, ctx.today,
+                        rsi_period, rsi_entry_min, rsi_entry_max,
+                        rsi_mom_days, sma_period, min_history, earnings_blackout,
+                    )
+                    if score is not None and (best_score is None or score > best_score):
+                        best_score = score
+                        best_ticker = ticker
+                        best_price = price
+
+                if best_ticker is not None and best_price is not None:
+                    qty = round(equity * per_pos_pct / best_price, 4)
+                    if math.isfinite(qty) and qty > 0:
+                        log.info(
+                            "trend_momentum bot=%d SCALE-IN %s: entry signal re-fired "
+                            "(score=%.1f) at max capacity (qty=%.4f @ EUR%.2f)",
+                            ctx.bot_id, best_ticker, best_score, qty, best_price,
+                        )
+                        orders.append(Order(
+                            bot_id=ctx.bot_id, ticker=best_ticker, side=Side.BUY,
+                            qty=float(qty), ref_price_eur=best_price,
+                            signal_reason=(
+                                f"trend_momentum: scale-in at max positions "
+                                f"(entry signal score={best_score:.1f})"
+                            ),
+                            asset_class=_asset_class_for(best_ticker),
+                        ))
             return orders
 
         candidates: list[tuple[float, str, float, float]] = []  # (rsi_val, ticker, price, qty)

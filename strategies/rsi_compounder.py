@@ -49,6 +49,32 @@ def _asset_class_for(ticker: str) -> AssetClass:
     return _CLASS_MAP.get(cls, AssetClass.STOCK)
 
 
+def _rsi_entry_score(
+    close: pd.Series,
+    rsi_period: int,
+    lookback_days: int,
+    rsi_was_below: float,
+    rsi_now_above: float,
+    rsi_entry_max: float,
+) -> float | None:
+    """Return an entry signal score for scale-in, or None if signal does not fire.
+
+    Score = rsi_entry_max - rsi_now: higher means more room to run while still
+    in the valid RSI window. Returns None when any condition fails.
+    """
+    if len(close) < rsi_period + lookback_days + 1:
+        return None
+    rsi_min = _rsi_min_recent(close, rsi_period, lookback_days)
+    if rsi_min != rsi_min or rsi_min >= rsi_was_below:
+        return None
+    rsi_now = float(rsi(close, rsi_period).iloc[-1])
+    if rsi_now != rsi_now:
+        return None
+    if not (rsi_now_above <= rsi_now < rsi_entry_max):
+        return None
+    return rsi_entry_max - rsi_now
+
+
 def _rsi_min_recent(close: pd.Series, rsi_period: int, lookback: int) -> float:
     if len(close) < rsi_period + lookback + 1:
         return float("nan")
@@ -217,6 +243,49 @@ class RsiCompoundStrategy(Strategy):
         slots_available = max_concurrent - positions_after_exits
 
         if slots_available <= 0:
+            # --- 2a. Scale-in pass: at max capacity but cash available --------
+            # Re-score each held position using the entry signal. Add to the
+            # highest scorer so available cash stays productive.
+            if ctx.at_max_positions and market_was_oversold:
+                best_score: float | None = None
+                best_ticker: str | None = None
+                best_price: float | None = None
+
+                for ticker, pos in snapshot.positions.items():
+                    if ticker in tickers_being_sold:
+                        continue
+                    bars = ctx.bars.get(ticker)
+                    if bars is None or len(bars.df) < min_history:
+                        continue
+                    price = ctx.prices_eur.get(ticker) or bars.last_close()
+                    if price is None or not math.isfinite(price) or price <= 0:
+                        continue
+                    score = _rsi_entry_score(
+                        bars.df["close"], rsi_period, lookback_days,
+                        rsi_was_below, rsi_now_above, rsi_entry_max,
+                    )
+                    if score is not None and (best_score is None or score > best_score):
+                        best_score = score
+                        best_ticker = ticker
+                        best_price = price
+
+                if best_ticker is not None and best_price is not None:
+                    qty = round(equity * per_pos_pct / best_price, 4)
+                    if math.isfinite(qty) and qty > 0:
+                        log.info(
+                            "rsi_compounder bot=%d SCALE-IN %s: entry signal re-fired "
+                            "(score=%.1f) at max capacity (qty=%.4f @ EUR%.2f)",
+                            ctx.bot_id, best_ticker, best_score, qty, best_price,
+                        )
+                        orders.append(Order(
+                            bot_id=ctx.bot_id, ticker=best_ticker, side=Side.BUY,
+                            qty=float(qty), ref_price_eur=best_price,
+                            signal_reason=(
+                                f"rsi_compounder: scale-in at max positions "
+                                f"(entry signal score={best_score:.1f})"
+                            ),
+                            asset_class=_asset_class_for(best_ticker),
+                        ))
             return orders
 
         for ticker, bars in ctx.bars.items():

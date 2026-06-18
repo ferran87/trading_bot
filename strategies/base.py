@@ -24,6 +24,7 @@ class StrategyContext:
     force_rebalance: bool = False   # skip Monday-only gate (weekend / manual run)
     buys_per_ticker: dict[str, int] = field(default_factory=dict)  # open BUY count per ticker
     prices_eur: dict[str, float] = field(default_factory=dict)     # last close converted to EUR
+    at_max_positions: bool = False  # open count >= max_concurrent; triggers scale-in pass
 
 
 class Strategy(ABC):

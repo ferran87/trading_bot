@@ -127,6 +127,9 @@ def run_bot(
         )
         buys_per_ticker = {r.ticker: r.n for r in rows}
 
+    max_concurrent = int(params.get("max_concurrent", 10))
+    at_max = len(snapshot.positions) >= max_concurrent and snapshot.cash_eur > 50.0
+
     ctx = StrategyContext(
         bot_id=bot.id,
         today=today,
@@ -135,6 +138,7 @@ def run_bot(
         force_rebalance=force_rebalance,
         buys_per_ticker=buys_per_ticker,
         prices_eur=last_prices,
+        at_max_positions=at_max,
     )
     strategy = strategy_cls()
     orders = strategy.propose_orders(snapshot, ctx)
