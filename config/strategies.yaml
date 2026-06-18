@@ -130,6 +130,22 @@ bots:
     initial_capital_eur: 5000   # bounded capital for the thesis bot
 
 
+# Capital allocation — fraction of each owner's deposited capital assigned to each live bot.
+# Must sum to 100 per owner. Managed from the ⚖️ Allocation tab in the dashboard.
+# Paper bots always split equally and are not configured here.
+bot_allocations:
+  live:
+    Ferran:
+      17: 50   # RSI Compounder (Ferran) — Live
+      20: 50   # Trend Momentum (Ferran) — Live
+    Adria:
+      18: 50   # RSI Compounder (Adria) — Live
+      21: 50   # Trend Momentum (Adria) — Live
+    Antonio:
+      19: 50   # RSI Compounder (Antonio) — Live
+      22: 50   # Trend Momentum (Antonio) — Live
+
+
 strategies:
 
   aggressive_momentum:

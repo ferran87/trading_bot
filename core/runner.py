@@ -300,11 +300,17 @@ def _sync_t212_initial_capital(today: date) -> None:
                             )
                             continue
 
-                        # For bots without a since-date, split the owner's total
-                        # equally across the owner's enabled bots in this mode.
-                        # For bots with a since-date (live + manual cohort), use
-                        # the full filtered amount.
-                        if since is None:
+                        # Live bots: use the configured allocation % from
+                        # bot_allocations.live.<owner>.<bot_id> in strategies.yaml.
+                        # Paper bots (and live bots with no allocation entry): fall
+                        # back to equal split across the owner's peers in this mode.
+                        alloc_pct = (
+                            CONFIG.bot_allocation_pct(b.id)
+                            if mode == "live" else None
+                        )
+                        if alloc_pct is not None:
+                            per_bot_eur = round(deposited_eur * alloc_pct / 100.0, 2)
+                        elif since is None:
                             n_peers = len(owner_bots)
                             per_bot_eur = round(deposited_eur / n_peers, 2)
                         else:

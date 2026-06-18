@@ -18,6 +18,7 @@ from core.config import CONFIG  # noqa: E402
 from core.db import get_session  # noqa: E402
 from core.portfolio import Portfolio  # noqa: E402
 
+from dashboard.allocation_tab import render_allocation_tab  # noqa: E402
 from dashboard.backtest import render_backtest_tab  # noqa: E402
 from dashboard.readme_tab import render_readme_tab  # noqa: E402
 from dashboard.strategy_lab_tab import render_strategy_lab_tab  # noqa: E402
@@ -194,9 +195,16 @@ def _kpi(
     demo = (mode != "live")
     owner = bot.get("owner") if isinstance(bot, dict) else getattr(bot, "owner", None)
     t212_deposited = _t212_total_deposited(demo, owner=owner)
-    n = max(n_active_bots, 1)
-    deposit_share = (t212_deposited / n if t212_deposited > 0
-                     else float(bot["initial_eur"]))
+
+    # For live bots use the configured allocation %; for paper use equal split.
+    bot_id = int(bot["id"]) if isinstance(bot, dict) else int(getattr(bot, "id", 0))
+    alloc_pct = CONFIG.bot_allocation_pct(bot_id) if mode == "live" else None
+    if alloc_pct is not None and t212_deposited > 0:
+        deposit_share = t212_deposited * alloc_pct / 100.0
+    else:
+        n = max(n_active_bots, 1)
+        deposit_share = (t212_deposited / n if t212_deposited > 0
+                         else float(bot["initial_eur"]))
     if deposit_share:
         kpi["return_pct"] = kpi["total_eur"] / deposit_share - 1.0
     return kpi
@@ -1051,10 +1059,11 @@ if owner_all_bots.empty:
 n_paper = int(paper_all["enabled"].sum())
 n_live  = int(live_all["enabled"].sum())
 
-tab_readme, tab_paper, tab_live, tab_bt, tab_lab, tab_themes, tab_thesis = st.tabs([
+tab_readme, tab_paper, tab_live, tab_alloc, tab_bt, tab_lab, tab_themes, tab_thesis = st.tabs([
     "📖 Guia",
     f"🧪 Paper Trading ({n_paper} bot{'s' if n_paper != 1 else ''})",
     f"💶 En Viu ({n_live} bot{'s' if n_live != 1 else ''})",
+    "⚖️ Assignació",
     "📊 Backtest",
     "🧪 Laboratori d'estratègies",
     "📚 Temes",
@@ -1106,6 +1115,13 @@ with tab_live:
     live_bots = live_all[live_all["enabled"]].copy()
     _render_tab(live_bots, "live", equity_df, positions_df, trades_df, floor)
 
+# ── Admin check (hoisted — needed by allocation + AI tabs) ────────────────────
+_is_admin = (selected_owner == CONFIG.admin_owner)
+
+# ── Allocation tab ─────────────────────────────────────────────────────────────
+with tab_alloc:
+    render_allocation_tab(owner_all_bots, selected_owner, is_admin=_is_admin)
+
 # ── Backtest tab ───────────────────────────────────────────────────────────────
 with tab_bt:
     all_owner_bots = pd.concat([paper_all, live_all], ignore_index=True)
@@ -1117,11 +1133,6 @@ with tab_bt:
 # ── Guia tab ───────────────────────────────────────────────────────────────────
 with tab_readme:
     render_readme_tab()
-
-# ── Admin check ───────────────────────────────────────────────────────────────
-# Only the admin user (defined in config/users.yaml) can approve / reject in the
-# AI tabs. All other users see the same content but the action buttons are hidden.
-_is_admin = (selected_owner == CONFIG.admin_owner)
 
 # ── Strategy Lab tab ───────────────────────────────────────────────────────────
 with tab_lab:
