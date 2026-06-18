@@ -125,8 +125,8 @@ _STRATEGY_META: dict[str, dict] = {
         "points": [
             "Entra quan el mercat (SXR8.DE) és sobre SMA200 i l'acció és sobre SMA50",
             "RSI de l'acció entre 40–62 (correcció moderada) i RSI més alt que fa 3 dies",
-            "Stop catastròfic -15% · Stop seguidor 22% des del pic · Sortida si 3 dies sota SMA50",
-            "Dissenyat per mercats alcistes graduals i correccions del 10-15%",
+            "Stop catastròfic -15% · Stop seguidor 8% des del pic en EUR · Sortida si 3 dies sota SMA50",
+            "Evita entrades 7 dies abans/després de resultats trimestrals",
         ],
         "self_selects": "⚠️ Actiu durant bull markets, inactiu durant els crashes",
     },

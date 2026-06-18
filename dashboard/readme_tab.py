@@ -143,11 +143,11 @@ com identifiquem el tipus de mercat i com funciona cada bot.
             )
     with col2:
         with st.container(border=True):
-            st.markdown("**Compte**")
-            st.markdown("**Paper Trading — €50.000**")
+            st.markdown("**Comptes**")
+            st.markdown("**Paper (pràctica) + En Viu (real)**")
             st.caption(
-                "Diners virtuals per validar les estratègies sense risc real. "
-                "Quan estiguem satisfets, podem passar al compte de diners reals."
+                "Paper: diners virtuals per validar estratègies sense risc. "
+                "En Viu: compte real activable des de la pestanya En Viu."
             )
     with col3:
         with st.container(border=True):
@@ -160,10 +160,11 @@ com identifiquem el tipus de mercat i com funciona cada bot.
 
     st.markdown("""
 **Com funciona el pressupost virtual?**
-El compte Trading 212 és compartit, però cada bot té el seu propi *pressupost virtual*
-de **€25.000** (50% del total cadascun). Cada bot gestiona el seu propi efectiu
-i les seves pròpies posicions, de manera que el rendiment de cada estratègia és
-mesurable per separat.
+Cada compte T212 (paper o en viu) té un saldo total. El sistema divideix
+aquest saldo entre els bots actius del propietari del compte segons el **%
+d'assignació** configurat a la pestanya ⚖️ Assignació (per defecte 50 / 50).
+Cada bot gestiona el seu propi efectiu i posicions de manera independent —
+el rendiment de cada estratègia és mesurable per separat.
 """)
 
     st.divider()
@@ -265,7 +266,8 @@ mesurable per separat.
     st.divider()
 
     # ── Bot 7: RSI Compounder ──────────────────────────────────────────────────
-    st.markdown("### 🤖 Bot 7 — RSI Compounder")
+    st.markdown("### 🤖 RSI Compounder (bots 7 / 17)")
+    st.caption("Bot 7 = paper · Bot 17 = en viu (activable des de la pestanya En Viu)")
 
     left, right = st.columns([3, 2])
     with left:
@@ -284,8 +286,7 @@ No és un bot actiu: pot estar mesos en efectiu fins que es dóna el moment adeq
    darrers 15 dies (senyal de sobrevenda extrema).
 3. **Recuperació iniciada:** el RSI actual de l'acció és entre **40 i 65** — ja ha
    rebotut però no s'ha recuperat del tot.
-4. **No massa calenta:** RSI actual < 65 per evitar entrar en accions ja
-   molt recuperades.
+4. **No massa calenta:** RSI actual < 65 per evitar entrar en accions ja molt recuperades.
 """)
 
         with st.expander("🚪 Condicions de sortida (per ordre de prioritat)"):
@@ -299,6 +300,15 @@ No és un bot actiu: pot estar mesos en efectiu fins que es dóna el moment adeq
    - RSI entre 70–80 → stop al **20%** (mercat calent, protegim guanys).
    - RSI > 80 → stop al **12%** (eufòria, bloquem guanys al màxim).
 4. **Sortida temporal:** màxim **90 dies** en posició, si mai ha estat en guanys.
+""")
+
+        with st.expander("📈 Scale-in (màxim de posicions assolit)"):
+            st.markdown("""
+Quan el bot ja té **10 posicions obertes** però encara queda efectiu disponible,
+en lloc d'esperar ociós reavalia totes les posicions actuals amb el senyal d'entrada.
+La posició que mostra el senyal més fort (ha tornat a entrar en territori de
+sobrevenda i ara es recupera) rep una compra addicional. Això manté el capital
+productiu sense obrir noves posicions.
 """)
 
     with right:
@@ -322,7 +332,8 @@ No és un bot actiu: pot estar mesos en efectiu fins que es dóna el moment adeq
     st.divider()
 
     # ── Bot 10: Trend Momentum ─────────────────────────────────────────────────
-    st.markdown("### 📈 Bot 10 — Trend Momentum")
+    st.markdown("### 📈 Trend Momentum (bots 10 / 20)")
+    st.caption("Bot 10 = paper · Bot 20 = en viu (activable des de la pestanya En Viu)")
 
     left, right = st.columns([3, 2])
     with left:
@@ -344,6 +355,8 @@ moment en què la tendència es reprèn.
    ha entrat en territori de pànic.
 4. **Momentum recuperant:** RSI actual més alt que fa **3 dies** — la correcció
    s'ha aturat i el comprador torna.
+5. **Sense resultats propers:** s'eviten accions amb **presentació de resultats**
+   en els propers o passats **7 dies** (risc d'un gap brusc).
 """)
 
         with st.expander("🚪 Condicions de sortida (per ordre de prioritat)"):
@@ -351,9 +364,18 @@ moment en què la tendència es reprèn.
 1. **Stop catastròfic:** si l'acció cau un **15%** des del cost → sortida immediata.
 2. **Ruptura de tendència:** si l'acció tanca per sota de la **SMA50** durant
    **3 dies consecutius** → la tendència s'ha trencat, sortim.
-3. **Stop seguidor:** **22%** des del màxim assolit — prou ample per aguantar
-   oscil·lacions normals però que tanca si el mercat gira de veritat.
+3. **Stop seguidor:** **8% des del màxim en EUR** — mesurat en euros (divisa del
+   compte) per capturar el guany real independentment de les fluctuacions del canvi
+   USD/EUR. Prou ajustat per no deixar escapar guanys en correccions ràpides.
 4. **Sortida temporal:** màxim **60 dies** en posició, si mai ha estat en guanys.
+""")
+
+        with st.expander("📈 Scale-in (màxim de posicions assolit)"):
+            st.markdown("""
+Quan el bot ja té **10 posicions obertes** però queda efectiu disponible,
+reavalia totes les posicions actuals amb el senyal d'entrada complet
+(SMA50, RSI 40–62, momentum creixent, sense resultats propers, mercat alcista).
+La posició amb el senyal més fort rep una compra addicional.
 """)
 
     with right:
@@ -387,10 +409,7 @@ exactament quan l'altre no opera.
     c1, c2, c3, c4 = st.columns(4)
     with c1:
         with st.container(border=True):
-            st.markdown(
-                f"🔴 **CRASH**",
-                unsafe_allow_html=True,
-            )
+            st.markdown("🔴 **CRASH**")
             st.markdown("🤖 RSI Compounder **ACTIU**")
             st.markdown("📈 Trend Momentum en efectiu")
 
@@ -435,14 +454,87 @@ Els resultats detallats dels backtests es poden consultar a la pestanya **📊 B
 
     st.divider()
 
+    # ── Capital Allocation ─────────────────────────────────────────────────────
+    st.markdown("### ⚖️ Assignació de Capital")
+
+    st.markdown("""
+Cada propietari de compte pot distribuir el seu saldo de T212 entre els seus dos
+bots en qualsevol proporció que sumi 100%. La configuració es fa a la pestanya
+**⚖️ Assignació** del dashboard.
+""")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        with st.container(border=True):
+            st.markdown("**Paper Trading**")
+            st.caption("Sempre dividit equitativament entre els bots actius. No configurable.")
+    with col_b:
+        with st.container(border=True):
+            st.markdown("**En Viu**")
+            st.caption(
+                "Configurable per propietari. Per defecte 50% / 50%. "
+                "El canvi té efecte en la propera execució diària del bot."
+            )
+
+    st.markdown("""
+**Com funciona el pressupost:** el bot multiplica el saldo total dipositat
+al compte T212 pel seu % assignat per obtenir el seu pressupost. En funció
+de quant d'aquest pressupost ja té invertit en posicions obertes, decideix
+si té prou efectiu disponible per obrir noves posicions o fer scale-in.
+""")
+
+    st.divider()
+
+    # ── Strategy Lab ───────────────────────────────────────────────────────────
+    st.markdown("### 🧪 Laboratori d'Estratègies (IA)")
+
+    st.markdown("""
+El **Laboratori d'Estratègies** és una capa d'intel·ligència artificial (Claude)
+que analitza l'historial de les posicions tancades i proposa ajustos numèrics als
+paràmetres dels bots (RSI, stops, mides de posició, etc.).
+""")
+
+    col_l, col_r = st.columns([3, 2])
+    with col_l:
+        with st.expander("Com funciona el cicle d'aprenentatge"):
+            st.markdown("""
+1. **Anàlisi:** l'agent llegeix les posicions tancades reals i fa backtests amb
+   paràmetres alternatius per mesurar si millorarien el rendiment.
+2. **Proposta:** si troba una millora, crea una proposta amb el paràmetre,
+   el valor actual, el nou valor i la justificació.
+3. **Aprovació:** l'administrador revisa la proposta a la pestanya
+   🧪 Laboratori i l'accepta o rebutja.
+4. **Aplicació:** si s'accepta, el YAML de configuració s'actualitza
+   automàticament i el bot utilitza el nou valor en la propera execució.
+5. **Seguiment:** 30 i 90 dies després, el sistema mesura si el P&L
+   va millorar realment amb el canvi.
+""")
+    with col_r:
+        with st.container(border=True):
+            st.markdown("**Garanties de seguretat:**")
+            st.markdown("""
+- La IA **mai** opera directament
+- Tots els canvis passen per aprovació humana
+- Hi ha rangs màxims per a cada paràmetre
+- Cada proposta inclou validació walk-forward
+""")
+
+    st.divider()
+
     # ── FAQ ────────────────────────────────────────────────────────────────────
     st.markdown("### ❓ Preguntes Freqüents")
 
     with st.expander("Puc perdre diners reals?"):
         st.markdown("""
-**Ara mateix, no.** Estem operant amb el compte de *pràctica* de Trading 212 (diners virtuals).
-Tot funciona igual que un compte real, però les operacions no afecten diners reals.
-Quan tinguem confiança en els resultats, decidirem conjuntament si passem al compte d'inversió real.
+**En mode paper, no.** Els bots paper (7, 9, 10, 12) operen amb diners virtuals —
+tot funciona igual que un compte real però les operacions no afecten diners reals.
+
+**En mode en viu, sí.** Els bots en viu (17, 20, 19, 22) operen amb diners reals
+del compte T212. Per activar-los cal encendre l'interruptor a la pestanya
+**💶 En Viu**. Per defecte estan **desactivats**.
+
+Quan tingueu confiança en els resultats del paper, podeu decidir conjuntament
+si activeu el compte en viu.
 """)
 
     with st.expander("Qui controla el bot? Puc aturar-lo?"):
@@ -451,6 +543,7 @@ El bot l'administra en Ferran. Qualsevol de vosaltres pot:
 - **Veure el rendiment** en temps real en aquest dashboard.
 - **Canviar l'estratègia** des de la pestanya Paper o En Viu (selector d'estratègia).
 - **Deshabilitar el trading en viu** des de l'interruptor de la pestanya En Viu.
+- **Canviar l'assignació de capital** des de la pestanya ⚖️ Assignació.
 
 Les ordres es col·loquen directament al compte de Trading 212 via API. Si hi ha
 qualsevol problema, parleu-ho directament amb en Ferran.
@@ -475,9 +568,39 @@ El bot s'executa **una vegada al dia**, típicament al matí abans de l'obertura
 dels mercats europeus (09:00–09:30 CET). Analitza totes les accions de l'univers
 i col·loca les ordres que compleixen les condicions.
 
-En règims de calma (BULL sense correccions significatives), pot passar dies o
-setmanes sense operar. En moments de crash, pot entrar en diverses posicions
-el mateix dia.
+En règims de calma (BULL sense correccions significatives), el RSI Compounder pot
+passar dies o setmanes sense obrir posicions noves. En moments de crash, pot entrar
+en diverses posicions el mateix dia.
+
+Quan un bot ja té **10 posicions obertes** (màxim permès) però encara té efectiu
+disponible, activa el **scale-in**: reavalia les posicions actuals amb el senyal
+d'entrada i afegeix capital a la que presenta el senyal més fort. Així el capital
+mai queda ociós innecessàriament.
+""")
+
+    with st.expander("Qui pot canviar l'assignació de capital?"):
+        st.markdown("""
+Només l'**administrador** (Ferran) pot modificar i desar els percentatges
+d'assignació des de la pestanya ⚖️ Assignació. Els altres usuaris poden veure
+la configuració actual però no editar-la.
+
+El canvi té efecte en la **propera execució diària** del bot — no hi ha
+rebalanceig immediat de les posicions obertes.
+""")
+
+    with st.expander("Per què el stop del Trend Momentum és tan ajustat (8%)?"):
+        st.markdown("""
+El stop seguidor del Trend Momentum es **mesura en EUR** (la divisa del compte),
+no en la divisa nativa de l'acció. Això és important per a accions americanes:
+
+- Una acció americana pot caure un **12% en USD** però, si el dòlar s'ha
+  enfortit alhora, la pèrdua en EUR pot ser molt menor (o fins i tot un guany).
+- Si mesuréssim el stop en USD, podríem sortir d'una posició que en realitat
+  és positiva en EUR.
+
+Per tant, el **8% és la caiguda real des del màxim en euros** — és el guany
+real que estem protegint. Un 8% en EUR és equivalent a un stop d'uns
+12–15% en USD depenent de la paritat del moment.
 """)
 
     with st.expander("Per què UCITS ETFs i no ETFs americans (SPY, QQQ)?"):
