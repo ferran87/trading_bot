@@ -130,9 +130,10 @@ bots:
     initial_capital_eur: 5000   # bounded capital for the thesis bot
 
 
-# Capital allocation — fraction of each owner's deposited capital assigned to each live bot.
-# Must sum to 100 per owner. Managed from the ⚖️ Allocation tab in the dashboard.
-# Paper bots always split equally and are not configured here.
+# Capital allocation — SEED values only. The authoritative store is the DB column
+# bots.live_capital_pct (edited from the ⚖️ Allocation tab). These values seed that
+# column on `python main.py --init-db` and are NEVER written back to by the dashboard.
+# Must sum to 100 per owner. Paper bots always split equally and are not configured here.
 bot_allocations:
   live:
     Ferran:

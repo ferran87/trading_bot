@@ -196,10 +196,11 @@ def _kpi(
     owner = bot.get("owner") if isinstance(bot, dict) else getattr(bot, "owner", None)
     t212_deposited = _t212_total_deposited(demo, owner=owner)
 
-    # For live bots use the configured allocation %; for paper use equal split.
-    bot_id = int(bot["id"]) if isinstance(bot, dict) else int(getattr(bot, "id", 0))
-    alloc_pct = CONFIG.bot_allocation_pct(bot_id) if mode == "live" else None
-    if alloc_pct is not None and t212_deposited > 0:
+    # For live bots use the per-bot allocation % (bots.live_capital_pct);
+    # for paper use equal split across the owner's active bots. An unset value
+    # arrives as NaN from the float column, so guard with the self-equality test.
+    alloc_pct = bot.get("live_capital_pct") if mode == "live" else None
+    if alloc_pct is not None and alloc_pct == alloc_pct and t212_deposited > 0:
         deposit_share = t212_deposited * alloc_pct / 100.0
     else:
         n = max(n_active_bots, 1)

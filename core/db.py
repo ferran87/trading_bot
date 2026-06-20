@@ -52,6 +52,12 @@ class Bot(Base):
     # Set to the date the live bot is first activated so pre-existing manual
     # portfolio deposits are never included in the bot's budget.
     live_capital_since = Column(Date, nullable=True, default=None)
+    # Fraction (0-100) of the owner's live T212 deposit allocated to this bot.
+    # NULL = no explicit allocation → fall back to equal split among the owner's
+    # enabled live bots. Edited from the dashboard ⚖️ Allocation tab; stored in
+    # the DB (not YAML) so the Streamlit Cloud dashboard and the local bot stay
+    # in sync via Supabase.
+    live_capital_pct = Column(Float, nullable=True, default=None)
 
     trades = relationship("Trade", back_populates="bot", cascade="all, delete-orphan")
     positions = relationship("Position", back_populates="bot", cascade="all, delete-orphan")
@@ -525,6 +531,7 @@ def _migrate(eng) -> None:
         "ALTER TABLE trades ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'filled'",
         "ALTER TABLE run_logs ADD COLUMN IF NOT EXISTS triggered_by TEXT DEFAULT 'auto'",
         "ALTER TABLE bots ADD COLUMN IF NOT EXISTS live_capital_since DATE",
+        "ALTER TABLE bots ADD COLUMN IF NOT EXISTS live_capital_pct DOUBLE PRECISION",
     ]
     with eng.connect() as conn:
         for sql in migrations:
@@ -563,6 +570,16 @@ def init_db() -> None:
     Base.metadata.create_all(engine())
 
     initial_capital = float(CONFIG.settings["guardrails"]["initial_capital_eur"])
+
+    # Flatten bot_allocations.live.<owner>.<id> → {bot_id: pct} for seeding the
+    # live_capital_pct column. The YAML block is the seed source; the DB is
+    # authoritative once the dashboard edits it (see below).
+    alloc_seed: dict[int, float] = {}
+    for owner_bots in CONFIG.strategies.get("bot_allocations", {}).get("live", {}).values():
+        if isinstance(owner_bots, dict):
+            for bid, pct in owner_bots.items():
+                alloc_seed[int(bid)] = float(pct)
+
     with get_session() as s:
         for b in CONFIG.strategies["bots"]:
             # Parse optional live_capital_since (YYYY-MM-DD string or None)
@@ -570,6 +587,7 @@ def init_db() -> None:
             lcs: date | None = (
                 date.fromisoformat(str(lcs_raw)) if lcs_raw else None
             )
+            alloc_pct = alloc_seed.get(int(b["id"]))
 
             existing = s.query(Bot).filter(Bot.id == b["id"]).one_or_none()
             if existing is None:
@@ -583,6 +601,7 @@ def init_db() -> None:
                         owner=b.get("owner", ""),
                         trading_mode=b.get("trading_mode", "paper"),
                         live_capital_since=lcs,
+                        live_capital_pct=alloc_pct,
                     )
                 )
             else:
@@ -595,6 +614,10 @@ def init_db() -> None:
                 # (don't overwrite a date set via dashboard with None)
                 if lcs is not None:
                     existing.live_capital_since = lcs
+                # Seed live_capital_pct ONLY when unset, so re-running --init-db
+                # never clobbers an allocation the user set in the dashboard.
+                if existing.live_capital_pct is None and alloc_pct is not None:
+                    existing.live_capital_pct = alloc_pct
         s.commit()
     print(f"DB ready at {CONFIG.db_path}")
 

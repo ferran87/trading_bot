@@ -144,21 +144,6 @@ class Config:
                 return u["name"]
         return None
 
-    def bot_allocation_pct(self, bot_id: int) -> float | None:
-        """Return the configured capital allocation % for a live bot, or None.
-
-        Returns None when no allocation is set (caller should fall back to
-        equal-split or the pre-existing since-date logic).
-        """
-        allocs = self.strategies.get("bot_allocations", {})
-        live_allocs = allocs.get("live", {})
-        for owner_bots in live_allocs.values():
-            if isinstance(owner_bots, dict):
-                val = owner_bots.get(bot_id)
-                if val is not None:
-                    return float(val)
-        return None
-
     def reload_strategies(self) -> None:
         """Invalidate the cached strategies dict so the next access re-reads
         the YAML from disk.

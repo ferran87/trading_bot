@@ -1,104 +1,56 @@
 """Streamlit tab — '⚖️ Allocation'.
 
 Lets each owner distribute their live-account capital across their live bots
-as a percentage. Changes are written surgically to ``config/strategies.yaml``
-and take effect on the next bot run.
+as a percentage. Allocations are stored in the DB (``bots.live_capital_pct``),
+not YAML, so the Streamlit Cloud dashboard and the local bot stay in sync via
+Supabase. Changes take effect on the next bot run.
 
 Paper bots are always split equally and are not shown here.
 """
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-from core.config import CONFIG, PROJECT_ROOT
+from dashboard.queries import _set_bot_allocations
 
 log = logging.getLogger(__name__)
 
 
-# ── YAML surgical edit ────────────────────────────────────────────────────────
+def _current_pct(value) -> int:
+    """Coerce a DB live_capital_pct (float / NaN / None) to an int percent."""
+    if value is None or value != value:  # None or NaN
+        return 0
+    return int(round(float(value)))
 
-def _save_allocations(allocations: dict[str, dict[int, int]]) -> None:
-    """Overwrite the ``bot_allocations`` block in ``config/strategies.yaml``.
 
-    ``allocations`` format: ``{owner_name: {bot_id: pct_int}}``.
+def redistribute_on_disable(owner_bots: pd.DataFrame, disabled_bot_id: int) -> None:
+    """When a live bot is disabled, redistribute its allocation proportionally
+    to the owner's remaining enabled live bots and persist to the DB.
 
-    Uses line-level surgery (no YAML round-trip) so the rest of the file —
-    comments, key order, strategy params — is fully preserved.
+    ``owner_bots`` is the owner's live-bot slice of the bots DataFrame.
     """
-    yaml_path = PROJECT_ROOT / "config" / "strategies.yaml"
-    lines = yaml_path.read_text(encoding="utf-8").splitlines(keepends=True)
-
-    # Build new block lines
-    new_block: list[str] = [
-        "# Capital allocation — fraction of each owner's deposited capital assigned to each live bot.\n",
-        "# Must sum to 100 per owner. Managed from the ⚖️ Allocation tab in the dashboard.\n",
-        "# Paper bots always split equally and are not configured here.\n",
-        "bot_allocations:\n",
-        "  live:\n",
-    ]
-    for owner, bots in sorted(allocations.items()):
-        new_block.append(f"    {owner}:\n")
-        for bot_id, pct in sorted(bots.items()):
-            new_block.append(f"      {bot_id}: {pct}\n")
-    new_block.append("\n")
-
-    # Locate existing block boundaries
-    start_idx: int | None = None
-    end_idx = len(lines)
-    for i, line in enumerate(lines):
-        stripped = line.rstrip("\r\n")
-        if stripped == "bot_allocations:":
-            start_idx = i
-        elif start_idx is not None and i > start_idx:
-            if stripped and not stripped[0].isspace() and not stripped.startswith("#"):
-                end_idx = i
-                break
-
-    if start_idx is not None:
-        # Replace existing block (including any leading comment lines right above it)
-        comment_start = start_idx
-        for j in range(start_idx - 1, -1, -1):
-            if lines[j].startswith("#"):
-                comment_start = j
-            else:
-                break
-        lines[comment_start:end_idx] = new_block
-    else:
-        # Insert before `strategies:` line
-        for i, line in enumerate(lines):
-            if line.startswith("strategies:"):
-                lines[i:i] = new_block
-                break
-
-    yaml_path.write_text("".join(lines), encoding="utf-8")
-
-
-def redistribute_on_disable(owner: str, disabled_bot_id: int) -> None:
-    """When a live bot is disabled, redistribute its allocation to the other
-    enabled live bots of the same owner proportionally.
-
-    Called from the live-toggle handler in app.py.
-    """
-    allocs_cfg = CONFIG.strategies.get("bot_allocations", {}).get("live", {})
-    owner_allocs: dict[int, int] = {
-        int(k): int(v)
-        for k, v in allocs_cfg.get(owner, {}).items()
+    allocs: dict[int, int] = {
+        int(r["id"]): _current_pct(r.get("live_capital_pct"))
+        for _, r in owner_bots.iterrows()
     }
-    if disabled_bot_id not in owner_allocs:
+    if disabled_bot_id not in allocs:
         return
 
-    freed = owner_allocs.pop(disabled_bot_id)
-    remaining = {k: v for k, v in owner_allocs.items() if k != disabled_bot_id}
-    if not remaining:
+    freed = allocs.pop(disabled_bot_id)
+    remaining = {
+        bid: pct for bid, pct in allocs.items()
+        if bid in set(owner_bots[owner_bots["enabled"]]["id"].astype(int))
+    }
+    if not remaining or freed <= 0:
+        # Just zero the disabled bot.
+        _set_bot_allocations({disabled_bot_id: 0.0})
         return
 
     total_rest = sum(remaining.values()) or 1
-    # Distribute freed % proportionally, rounding down; give remainder to first bot.
-    redistributed: dict[int, int] = {}
+    redistributed: dict[int, float] = {}
     leftover = freed
     first_key = next(iter(remaining))
     for bid, pct in remaining.items():
@@ -107,16 +59,8 @@ def redistribute_on_disable(owner: str, disabled_bot_id: int) -> None:
         leftover -= add
     redistributed[first_key] += leftover  # absorb rounding remainder
 
-    # Merge back into full allocations and save
-    full: dict[str, dict[int, int]] = {}
-    for o, bots in allocs_cfg.items():
-        if o == owner:
-            full[o] = {disabled_bot_id: 0, **redistributed}
-        else:
-            full[o] = {int(k): int(v) for k, v in bots.items()}
-
-    _save_allocations(full)
-    CONFIG.reload_strategies()
+    payload: dict[int, float | None] = {disabled_bot_id: 0.0, **redistributed}
+    _set_bot_allocations(payload)
 
 
 # ── Tab renderer ──────────────────────────────────────────────────────────────
@@ -144,30 +88,21 @@ def render_allocation_tab(
         st.info("No hi ha bots en viu configurats.")
         return
 
-    # Load current allocations
-    allocs_cfg = CONFIG.strategies.get("bot_allocations", {}).get("live", {})
-
-    # Show only the selected owner's section (consistent with rest of dashboard)
     owner_bots = live_bots[live_bots["owner"] == selected_owner].copy()
     if owner_bots.empty:
         st.info(f"No hi ha bots en viu per a {selected_owner}.")
         return
 
-    _render_owner_section(owner_bots, selected_owner, allocs_cfg, can_edit)
+    _render_owner_section(owner_bots, selected_owner, can_edit)
 
 
 def _render_owner_section(
     owner_bots: pd.DataFrame,
     owner: str,
-    allocs_cfg: dict,
     can_edit: bool,
 ) -> None:
-    owner_allocs_raw = allocs_cfg.get(owner, {})
-    owner_allocs: dict[int, int] = {int(k): int(v) for k, v in owner_allocs_raw.items()}
-
     enabled_ids = set(owner_bots[owner_bots["enabled"]]["id"].astype(int))
     all_bot_rows = owner_bots.to_dict("records")
-
     if not all_bot_rows:
         return
 
@@ -176,7 +111,7 @@ def _render_owner_section(
     for bot in all_bot_rows:
         bid = int(bot["id"])
         is_enabled = bid in enabled_ids
-        current_pct = owner_allocs.get(bid, 0)
+        current_pct = _current_pct(bot.get("live_capital_pct"))
 
         label = f"**{bot['name']}**"
         if not is_enabled:
@@ -234,7 +169,8 @@ def _render_owner_section(
             disabled=not can_save,
             key=f"save_alloc_{owner}",
         ):
-            _persist_allocations(owner, new_values, allocs_cfg)
+            # Persist only the bots shown for this owner (enabled + disabled).
+            _set_bot_allocations({bid: float(pct) for bid, pct in new_values.items()})
             st.success("Assignació desada. Tindrà efecte en la propera execució.")
             st.rerun()
 
@@ -244,23 +180,3 @@ def _render_owner_section(
         delta = 100 - enabled_total
         sign = "+" if delta > 0 else ""
         st.warning(f"Cal ajustar {sign}{delta}% per arribar al 100%.")
-
-
-def _persist_allocations(
-    owner: str,
-    new_owner_values: dict[int, int],
-    allocs_cfg: dict,
-) -> None:
-    """Merge the updated owner slice back into the full allocations dict and save."""
-    full: dict[str, dict[int, int]] = {}
-    for o, bots in allocs_cfg.items():
-        if o == owner:
-            full[o] = new_owner_values
-        else:
-            full[o] = {int(k): int(v) for k, v in bots.items()}
-    # Add owner if it wasn't there yet
-    if owner not in full:
-        full[owner] = new_owner_values
-
-    _save_allocations(full)
-    CONFIG.reload_strategies()

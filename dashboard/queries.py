@@ -13,7 +13,7 @@ from core.db import Bot, EquitySnapshot, Position, RunLog, Trade, get_session
 
 _BOTS_COLUMNS = [
     "id", "name", "strategy", "initial_eur", "enabled",
-    "owner", "trading_mode",
+    "owner", "trading_mode", "live_capital_pct",
 ]
 
 
@@ -30,6 +30,7 @@ def _load_bots() -> pd.DataFrame:
                 "enabled": bool(b.enabled),
                 "owner": b.owner or f"Bot {b.id}",
                 "trading_mode": getattr(b, "trading_mode", "paper"),
+                "live_capital_pct": getattr(b, "live_capital_pct", None),
             }
             for b in rows
         ]
@@ -38,6 +39,22 @@ def _load_bots() -> pd.DataFrame:
         if not data:
             return pd.DataFrame(columns=_BOTS_COLUMNS)
         return pd.DataFrame(data)
+
+
+def _set_bot_allocations(allocations: dict[int, float | None]) -> None:
+    """Persist live-bot capital allocation % to the DB (bots.live_capital_pct).
+
+    ``allocations`` maps bot_id → pct (0-100) or None. Writing to the DB (not
+    YAML) keeps the Streamlit Cloud dashboard and the local bot in sync via
+    Supabase, exactly like the enable/disable and live-toggle controls.
+    """
+    with get_session() as s:
+        for bid, pct in allocations.items():
+            bot = s.query(Bot).filter(Bot.id == bid).one_or_none()
+            if bot is not None:
+                bot.live_capital_pct = pct
+        s.commit()
+    _load_bots.clear()
 
 
 def _set_owner_mode_strategies(

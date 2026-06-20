@@ -304,12 +304,12 @@ def _sync_t212_initial_capital(today: date) -> None:
                             )
                             continue
 
-                        # Live bots: use the configured allocation % from
-                        # bot_allocations.live.<owner>.<bot_id> in strategies.yaml.
-                        # Paper bots (and live bots with no allocation entry): fall
+                        # Live bots: use the per-bot allocation % stored on the
+                        # Bot row (live_capital_pct), edited from the dashboard.
+                        # Paper bots (and live bots with no allocation set): fall
                         # back to equal split across the owner's peers in this mode.
                         alloc_pct = (
-                            CONFIG.bot_allocation_pct(b.id)
+                            getattr(b, "live_capital_pct", None)
                             if mode == "live" else None
                         )
                         if alloc_pct is not None:
