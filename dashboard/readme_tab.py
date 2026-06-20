@@ -306,9 +306,12 @@ No és un bot actiu: pot estar mesos en efectiu fins que es dóna el moment adeq
             st.markdown("""
 Quan el bot ja té **10 posicions obertes** però encara queda efectiu disponible,
 en lloc d'esperar ociós reavalia totes les posicions actuals amb el senyal d'entrada.
-La posició que mostra el senyal més fort (ha tornat a entrar en territori de
-sobrevenda i ara es recupera) rep una compra addicional. Això manté el capital
-productiu sense obrir noves posicions.
+**Totes** les que tornen a complir el senyal (han tornat a entrar en sobrevenda
+i es recuperen) reben una compra fins a arribar al seu pes objectiu (**6,7%**
+del capital per acció). Les compres es prioritzen per la força del senyal i el
+límit de 5 operacions/dia reparteix la resta en dies següents. Així el capital
+addicional es desplega en les oportunitats reals de la cartera sense obrir noves
+posicions.
 """)
 
     with right:
@@ -375,7 +378,10 @@ moment en què la tendència es reprèn.
 Quan el bot ja té **10 posicions obertes** però queda efectiu disponible,
 reavalia totes les posicions actuals amb el senyal d'entrada complet
 (SMA50, RSI 40–62, momentum creixent, sense resultats propers, mercat alcista).
-La posició amb el senyal més fort rep una compra addicional.
+**Totes** les que el compleixen reben una compra fins a arribar al seu pes
+objectiu (**10%** del capital per acció) — mai més del 10%, i les que ja hi són
+no es toquen. Les compres es prioritzen per la força del senyal i el límit de
+5 operacions/dia reparteix la resta en dies següents.
 """)
 
     with right:
@@ -573,9 +579,11 @@ passar dies o setmanes sense obrir posicions noves. En moments de crash, pot ent
 en diverses posicions el mateix dia.
 
 Quan un bot ja té **10 posicions obertes** (màxim permès) però encara té efectiu
-disponible, activa el **scale-in**: reavalia les posicions actuals amb el senyal
-d'entrada i afegeix capital a la que presenta el senyal més fort. Així el capital
-mai queda ociós innecessàriament.
+disponible, activa el **scale-in**: reavalia les posicions actuals i afegeix
+capital a **totes** les que tornen a complir el senyal d'entrada, fins al seu pes
+objectiu per acció (10% Trend Momentum · 6,7% RSI Compounder). Es prioritzen per
+força del senyal i es respecta el límit de 5 operacions/dia. Així el capital mai
+queda ociós innecessàriament.
 """)
 
     with st.expander("Qui pot canviar l'assignació de capital?"):
