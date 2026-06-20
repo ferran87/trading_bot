@@ -285,11 +285,16 @@ class TrendMomentumStrategy(Strategy):
         if slots_available <= 0:
             # --- Scale-in pass: at max capacity but cash available ------------
             # Market filter already passed above (we'd have returned otherwise).
-            # Re-score held positions with the entry signal; add to the best one.
+            # Top up EVERY held position that currently passes the entry signal,
+            # bringing each up to the per_position_pct target weight (10% of
+            # equity). Names already at/above target are skipped (never trimmed).
+            # Orders are emitted highest-score first; the executor refreshes cash
+            # between fills and enforces the cash + daily-trade guardrails, so the
+            # strongest signals are funded first and weaker ones spill to later
+            # runs once the 5/day limit is hit.
             if ctx.at_max_positions:
-                best_score: float | None = None
-                best_ticker: str | None = None
-                best_price: float | None = None
+                target_value = equity * per_pos_pct
+                topups: list[tuple[float, str, float, float]] = []  # (score, ticker, price, qty)
 
                 for ticker, pos in snapshot.positions.items():
                     if ticker in tickers_being_sold or ticker == market_ticker:
@@ -305,28 +310,33 @@ class TrendMomentumStrategy(Strategy):
                         rsi_period, rsi_entry_min, rsi_entry_max,
                         rsi_mom_days, sma_period, min_history, earnings_blackout,
                     )
-                    if score is not None and (best_score is None or score > best_score):
-                        best_score = score
-                        best_ticker = ticker
-                        best_price = price
+                    if score is None:
+                        continue
+                    # Gap to the target weight; skip names already at/above target.
+                    gap_eur = target_value - pos.qty * price
+                    if gap_eur <= 0:
+                        continue
+                    qty = round(gap_eur / price, 4)
+                    if not math.isfinite(qty) or qty <= 0:
+                        continue
+                    topups.append((score, ticker, price, qty))
 
-                if best_ticker is not None and best_price is not None:
-                    qty = round(equity * per_pos_pct / best_price, 4)
-                    if math.isfinite(qty) and qty > 0:
-                        log.info(
-                            "trend_momentum bot=%d SCALE-IN %s: entry signal re-fired "
-                            "(score=%.1f) at max capacity (qty=%.4f @ EUR%.2f)",
-                            ctx.bot_id, best_ticker, best_score, qty, best_price,
-                        )
-                        orders.append(Order(
-                            bot_id=ctx.bot_id, ticker=best_ticker, side=Side.BUY,
-                            qty=float(qty), ref_price_eur=best_price,
-                            signal_reason=(
-                                f"trend_momentum: scale-in at max positions "
-                                f"(entry signal score={best_score:.1f})"
-                            ),
-                            asset_class=_asset_class_for(best_ticker),
-                        ))
+                topups.sort(key=lambda x: x[0], reverse=True)  # highest score first
+                for score, ticker, price, qty in topups:
+                    log.info(
+                        "trend_momentum bot=%d SCALE-IN %s: top up to %.0f%% target "
+                        "(score=%.1f, qty=%.4f @ EUR%.2f)",
+                        ctx.bot_id, ticker, per_pos_pct * 100, score, qty, price,
+                    )
+                    orders.append(Order(
+                        bot_id=ctx.bot_id, ticker=ticker, side=Side.BUY,
+                        qty=float(qty), ref_price_eur=price,
+                        signal_reason=(
+                            f"trend_momentum: scale-in top-up to "
+                            f"{per_pos_pct * 100:.0f}% (entry score={score:.1f})"
+                        ),
+                        asset_class=_asset_class_for(ticker),
+                    ))
             return orders
 
         candidates: list[tuple[float, str, float, float]] = []  # (rsi_val, ticker, price, qty)
