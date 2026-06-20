@@ -124,9 +124,14 @@ def redistribute_on_disable(owner: str, disabled_bot_id: int) -> None:
 def render_allocation_tab(
     all_bots: pd.DataFrame,
     selected_owner: str,
-    is_admin: bool,
+    can_edit: bool = True,
 ) -> None:
-    """Render the ⚖️ Allocation tab."""
+    """Render the ⚖️ Allocation tab.
+
+    ``can_edit`` gates whether the sliders are interactive. Allocation is a
+    per-owner self-service action (like the live on/off toggle), so the caller
+    passes True for the account currently being viewed.
+    """
     st.subheader("Distribució de capital — bots en viu")
     st.caption(
         "Cada propietari distribueix el seu dipòsit T212 (en viu) entre els seus bots. "
@@ -148,14 +153,14 @@ def render_allocation_tab(
         st.info(f"No hi ha bots en viu per a {selected_owner}.")
         return
 
-    _render_owner_section(owner_bots, selected_owner, allocs_cfg, is_admin)
+    _render_owner_section(owner_bots, selected_owner, allocs_cfg, can_edit)
 
 
 def _render_owner_section(
     owner_bots: pd.DataFrame,
     owner: str,
     allocs_cfg: dict,
-    is_admin: bool,
+    can_edit: bool,
 ) -> None:
     owner_allocs_raw = allocs_cfg.get(owner, {})
     owner_allocs: dict[int, int] = {int(k): int(v) for k, v in owner_allocs_raw.items()}
@@ -181,7 +186,7 @@ def _render_owner_section(
         with col_label:
             st.markdown(label)
         with col_slider:
-            if is_enabled and is_admin:
+            if is_enabled and can_edit:
                 val = st.slider(
                     f"alloc_{bid}",
                     min_value=0,
@@ -194,7 +199,7 @@ def _render_owner_section(
                 )
                 new_values[bid] = val
             else:
-                # Disabled bot or viewer: show locked value
+                # Disabled bot or read-only view: show locked value
                 st.markdown(
                     f"<div style='padding:6px 0; color:gray'>{current_pct}% "
                     f"{'(inactiu — no assignable)' if not is_enabled else '(sols lectura)'}</div>",
@@ -223,7 +228,7 @@ def _render_owner_section(
             st.caption("Cap bot actiu.")
 
     with col_btn:
-        can_save = is_admin and (enabled_total == 100 or not enabled_ids)
+        can_save = can_edit and (enabled_total == 100 or not enabled_ids)
         if st.button(
             "💾 Desar assignació",
             disabled=not can_save,
@@ -233,8 +238,8 @@ def _render_owner_section(
             st.success("Assignació desada. Tindrà efecte en la propera execució.")
             st.rerun()
 
-    if not is_admin:
-        st.caption("Necessites rol d'administrador per modificar l'assignació.")
+    if not can_edit:
+        st.caption("Aquesta vista és de només lectura.")
     elif enabled_total != 100 and enabled_ids:
         delta = 100 - enabled_total
         sign = "+" if delta > 0 else ""

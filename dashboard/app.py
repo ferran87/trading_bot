@@ -1120,7 +1120,9 @@ _is_admin = (selected_owner == CONFIG.admin_owner)
 
 # ── Allocation tab ─────────────────────────────────────────────────────────────
 with tab_alloc:
-    render_allocation_tab(owner_all_bots, selected_owner, is_admin=_is_admin)
+    # Allocation is per-owner self-service (like the live on/off toggle): editable
+    # for whichever account is currently selected, not gated on the global admin.
+    render_allocation_tab(owner_all_bots, selected_owner, can_edit=True)
 
 # ── Backtest tab ───────────────────────────────────────────────────────────────
 with tab_bt:
