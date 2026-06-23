@@ -207,7 +207,9 @@ def _kpis_for(bot: dict, equity_df: pd.DataFrame, trades_df: pd.DataFrame) -> di
         total = float(ser.iloc[-1])
         cash = float(bot_eq["cash"].iloc[-1])
         invested = float(bot_eq["positions"].iloc[-1])
-        ret = total / float(bot["initial_eur"]) - 1.0
+        # initial_eur can be 0 for a 0%-allocated live bot — guard the division
+        # (return % is undefined on a zero base; report 0%).
+        ret = total / float(bot["initial_eur"]) - 1.0 if bot["initial_eur"] else 0.0
         daily = ser.pct_change().dropna()
         sharpe = (
             (daily.mean() / daily.std()) * (252 ** 0.5)
