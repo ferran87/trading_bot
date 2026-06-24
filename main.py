@@ -29,6 +29,8 @@ def _configure_logging() -> None:
         "%Y-%m-%d %H:%M:%S",
     )
 
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     stdout = logging.StreamHandler(sys.stdout)
     stdout.setFormatter(fmt)
     root.addHandler(stdout)
