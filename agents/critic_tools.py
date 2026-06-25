@@ -507,6 +507,50 @@ def compute_ratchet(baseline: dict, proposed: dict) -> bool:
         return False
 
 
+def _summary_metric(d: dict, metric: str) -> tuple[float | None, float | None]:
+    """Return ``(baseline, proposed)`` for ``metric`` from a summary dict.
+
+    Tolerates the shapes the agent emits: nested
+    (``{"baseline": {...}, "proposed": {...}}``), explicit
+    (``baseline_<metric>`` / ``proposed_<metric>``), and flat-plus-delta
+    (``<metric>`` is the proposed value, ``delta_<metric>`` is proposed-baseline
+    so baseline is back-derived).
+    """
+    if not d:
+        return None, None
+    if isinstance(d.get("baseline"), dict) or isinstance(d.get("proposed"), dict):
+        base = (d.get("baseline") or {}).get(metric)
+        prop = (d.get("proposed") or {}).get(metric)
+        if base is not None or prop is not None:
+            return base, prop
+    if f"baseline_{metric}" in d or f"proposed_{metric}" in d:
+        return d.get(f"baseline_{metric}"), d.get(f"proposed_{metric}")
+    if metric in d:
+        prop = d.get(metric)
+        delta = d.get(f"delta_{metric}")
+        base = (prop - delta) if (prop is not None and delta is not None) else None
+        return base, prop
+    return None, None
+
+
+def ratchet_from_summary(summary: dict) -> bool:
+    """Compute the ratchet verdict from a summary dict of any stored shape.
+
+    The agent persists ``simulate_param_change``/``walk_forward_validate``
+    output in a flattened form rather than the nested baseline/proposed dicts
+    ``compute_ratchet`` expects, so we extract both sides shape-tolerantly
+    before delegating. Returns False if return or drawdown can't be recovered.
+    """
+    base_ret, prop_ret = _summary_metric(summary, "return_pct")
+    base_dd,  prop_dd  = _summary_metric(summary, "max_drawdown_pct")
+    if None in (base_ret, prop_ret, base_dd, prop_dd):
+        return False
+    return compute_ratchet(
+        {"return_pct": base_ret, "max_drawdown_pct": base_dd},
+        {"return_pct": prop_ret, "max_drawdown_pct": prop_dd},
+    )
+
+
 # ── Track-record measurement (closes the learning loop) ─────────────────────
 #
 # After a parameter change is approved + applied, we want to know whether it

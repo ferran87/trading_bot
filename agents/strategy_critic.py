@@ -32,11 +32,11 @@ from agents.critic_tools import (
     BOUNDED_RANGES,
     MAX_PROPOSALS_PER_STRATEGY,
     clear_backtest_cache,
-    compute_ratchet,
     get_proposal_track_record,
     get_real_closed_positions,
     get_simulated_closed_positions,
     get_strategy_params,
+    ratchet_from_summary,
     simulate_param_change,
     walk_forward_validate,
 )
@@ -326,13 +326,11 @@ def _submit_proposal(args: dict) -> str:
     if not isinstance(bt_summary, dict) or not isinstance(wf_summary, dict):
         return json.dumps({"error": "summaries must be JSON objects"})
 
-    # Recompute ratchet ourselves from the provided summaries
-    # walk-forward 'test' block contains baseline + proposed; if structure
-    # differs we tolerate flat dicts too.
-    if "baseline" in wf_summary and "proposed" in wf_summary:
-        passes = compute_ratchet(wf_summary["baseline"], wf_summary["proposed"])
-    else:
-        passes = False
+    # Recompute the ratchet ourselves from the full-period backtest summary
+    # rather than trusting the agent's boolean. The summary is stored flat
+    # (proposed metrics + delta_* fields), so ratchet_from_summary back-derives
+    # the baseline and tolerates the other shapes the agent may emit.
+    passes = ratchet_from_summary(bt_summary)
 
     strategy = args["strategy"]
     with get_session() as s:
