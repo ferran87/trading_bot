@@ -256,6 +256,40 @@ def _format_delta_pct(proposed: float | None, baseline: float | None) -> str:
     return f"  {arrow} ({delta:+.2f}pp)"
 
 
+def _extract_metric(d: dict, metric: str) -> tuple[float | None, float | None]:
+    """Return ``(baseline, proposed)`` for ``metric`` from a summary dict.
+
+    The agent stores summaries free-form, so we tolerate the three shapes
+    seen in practice:
+
+    * **Nested** — ``{"baseline": {...}, "proposed": {...}}`` (full
+      ``simulate_param_change`` output).
+    * **Explicit** — ``{"baseline_<metric>": x, "proposed_<metric>": y}``
+      (the flattened walk-forward block).
+    * **Flat + delta** — ``{"<metric>": proposed, "delta_<metric>": prop-base}``
+      (the flattened "proposed" backtest block). Baseline is back-derived as
+      ``proposed - delta``.
+    """
+    if not d:
+        return None, None
+    # Nested baseline/proposed blocks
+    if isinstance(d.get("baseline"), dict) or isinstance(d.get("proposed"), dict):
+        base = (d.get("baseline") or {}).get(metric)
+        prop = (d.get("proposed") or {}).get(metric)
+        if base is not None or prop is not None:
+            return base, prop
+    # Explicit baseline_<metric> / proposed_<metric> keys
+    if f"baseline_{metric}" in d or f"proposed_{metric}" in d:
+        return d.get(f"baseline_{metric}"), d.get(f"proposed_{metric}")
+    # Flat proposed value + signed delta → back-derive baseline
+    if metric in d:
+        prop = d.get(metric)
+        delta = d.get(f"delta_{metric}")
+        base = (prop - delta) if (prop is not None and delta is not None) else None
+        return base, prop
+    return None, None
+
+
 def _render_proposal_card(row: pd.Series, *, is_admin: bool = False) -> None:
     bt = row["backtest"] or {}
     wf = row["walk_forward"] or {}
@@ -298,47 +332,57 @@ def _render_proposal_card(row: pd.Series, *, is_admin: bool = False) -> None:
         # Backtest comparison table
         st.markdown("##### Backtest complet (període 2024+)")
         if bt:
-            base = bt.get("baseline", bt) if "baseline" in bt else bt
-            prop = bt.get("proposed", {})
+            base_ret, prop_ret = _extract_metric(bt, "return_pct")
+            base_dd,  prop_dd  = _extract_metric(bt, "max_drawdown_pct")
+            base_nt,  prop_nt  = _extract_metric(bt, "n_trades")
             comp_df = pd.DataFrame([
                 {
                     "Mètrica":   "Rendiment",
-                    "Actual":    _format_pct(base.get("return_pct")),
-                    "Proposat":  _format_pct(prop.get("return_pct")) +
-                                 _format_delta_pct(prop.get("return_pct"), base.get("return_pct")),
+                    "Actual":    _format_pct(base_ret),
+                    "Proposat":  _format_pct(prop_ret) +
+                                 _format_delta_pct(prop_ret, base_ret),
                 },
                 {
                     "Mètrica":   "Màxim drawdown",
-                    "Actual":    _format_pct(base.get("max_drawdown_pct")),
-                    "Proposat":  _format_pct(prop.get("max_drawdown_pct")) +
-                                 _format_delta_pct(prop.get("max_drawdown_pct"), base.get("max_drawdown_pct")),
+                    "Actual":    _format_pct(base_dd),
+                    "Proposat":  _format_pct(prop_dd) +
+                                 _format_delta_pct(prop_dd, base_dd),
                 },
                 {
                     "Mètrica":   "Operacions",
-                    "Actual":    str(base.get("n_trades", "—")),
-                    "Proposat":  str(prop.get("n_trades", "—")),
+                    "Actual":    "—" if base_nt is None else f"{base_nt:g}",
+                    "Proposat":  "—" if prop_nt is None else f"{prop_nt:g}",
                 },
             ])
             st.dataframe(comp_df, use_container_width=True, hide_index=True)
 
-        # Walk-forward
+        # Walk-forward. Two stored shapes: nested train/test blocks, or a
+        # single flattened out-of-sample (test) block.
         st.markdown("##### Walk-forward (validació out-of-sample)")
+        wf_rows: list[dict] = []
         if wf_train and wf_test:
-            wf_df = pd.DataFrame([
-                {
-                    "Període":           "Train (in-sample)",
-                    "Rendiment actual":  _format_pct(wf_train.get("baseline", {}).get("return_pct")),
-                    "Rendiment proposat": _format_pct(wf_train.get("proposed", {}).get("return_pct")),
-                    "Δ":                 _format_pct(wf_train.get("delta_return_pct")),
-                },
-                {
-                    "Període":           "Test (out-of-sample)",
-                    "Rendiment actual":  _format_pct(wf_test.get("baseline", {}).get("return_pct")),
-                    "Rendiment proposat": _format_pct(wf_test.get("proposed", {}).get("return_pct")),
-                    "Δ":                 _format_pct(wf_test.get("delta_return_pct")),
-                },
-            ])
-            st.dataframe(wf_df, use_container_width=True, hide_index=True)
+            for label, block in (
+                ("Train (in-sample)", wf_train),
+                ("Test (out-of-sample)", wf_test),
+            ):
+                b, p = _extract_metric(block, "return_pct")
+                wf_rows.append({
+                    "Període":            label,
+                    "Rendiment actual":   _format_pct(b),
+                    "Rendiment proposat": _format_pct(p),
+                    "Δ":                  _format_pct(block.get("delta_return_pct")),
+                })
+        else:
+            b, p = _extract_metric(wf, "return_pct")
+            if b is not None or p is not None:
+                wf_rows.append({
+                    "Període":            "Test (out-of-sample)",
+                    "Rendiment actual":   _format_pct(b),
+                    "Rendiment proposat": _format_pct(p),
+                    "Δ":                  _format_pct(wf.get("delta_return_pct")),
+                })
+        if wf_rows:
+            st.dataframe(pd.DataFrame(wf_rows), use_container_width=True, hide_index=True)
             if wf.get("overfit_flag"):
                 st.warning("⚠️ Sobreajustada — la millora out-of-sample és molt menor que in-sample.")
         else:
