@@ -482,10 +482,30 @@ class Trading212Broker:
                 and post_exc.response.status_code == 400
             )
             if is_400:
+                # T212 returns a JSON error body with a specific reason code on
+                # 400 (e.g. MarketClosed, InsufficientResources, MinValueExceeded,
+                # PriceTooFarFromMarket). Surface it instead of guessing — a 400
+                # is NOT always "exchange closed": orders for other US tickers on
+                # the same schedule have been accepted in the same pre-market run
+                # while one specific ticker was rejected (see KO, 2026-06-24/26).
+                import json as _json
+                body = ""
+                try:
+                    body = (post_exc.response.text or "").strip()
+                except Exception:
+                    pass
+                reason = body or "(empty body)"
+                if body:
+                    try:
+                        parsed = _json.loads(body)
+                        if isinstance(parsed, dict):
+                            reason = parsed.get("code") or parsed.get("message") or body
+                    except Exception:
+                        pass  # non-JSON body — keep the raw text
                 log.warning(
                     "Trading212Broker: POST /equity/orders/market returned 400 for "
-                    "%s %s — exchange likely closed, skipping order",
-                    order.side.value, order.ticker,
+                    "%s %s — order rejected by T212, skipping. Reason: %s",
+                    order.side.value, order.ticker, reason,
                 )
                 return Fill(
                     ticker=order.ticker,
