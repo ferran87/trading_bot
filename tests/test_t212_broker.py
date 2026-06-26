@@ -289,18 +289,33 @@ class TestPlaceMarketOrderEdgeCases:
         """Fractional shares (≥ 0.01) are sent to T212 as-is — no flooring."""
         order_resp = {
             "id": 99, "ticker": "AAPL_US_EQ", "status": "FILLED",
-            "filledQuantity": 0.4422, "filledPrice": 100.0,
+            "filledQuantity": 0.442, "filledPrice": 100.0,
             "limitPrice": None, "stopPrice": None,
-            "filledValue": 44.22, "taxes": [],
+            "filledValue": 44.2, "taxes": [],
         }
-        order = _order(ticker="AAPL", qty=0.4422)
+        order = _order(ticker="AAPL", qty=0.442)
         with patch("requests.post", return_value=_mock_response(order_resp)) as mock_post:
             fill = broker.place_market_order(order)
         # The POST was made with the fractional qty, not floored
         mock_post.assert_called_once()
         sent_payload = mock_post.call_args.kwargs.get("json") or mock_post.call_args.args[1]
-        assert abs(sent_payload["quantity"] - 0.4422) < 1e-6
-        assert abs(fill.qty - 0.4422) < 1e-6
+        assert abs(sent_payload["quantity"] - 0.442) < 1e-6
+        assert abs(fill.qty - 0.442) < 1e-6
+
+    def test_qty_rounded_to_three_decimals(self, broker):
+        """Quantities are capped at 3 dp before submission — T212 rejects 4 dp
+        for some instruments (e.g. KO) with quantity-precision-mismatch 400."""
+        order_resp = {
+            "id": 77, "ticker": "AAPL_US_EQ", "status": "FILLED",
+            "filledQuantity": 1.389, "filledPrice": 70.0,
+            "limitPrice": None, "stopPrice": None,
+            "filledValue": 97.23, "taxes": [],
+        }
+        order = _order(ticker="AAPL", qty=1.3888)  # 4 dp from the strategy
+        with patch("requests.post", return_value=_mock_response(order_resp)) as mock_post:
+            broker.place_market_order(order)
+        sent_payload = mock_post.call_args.kwargs.get("json") or mock_post.call_args.args[1]
+        assert abs(sent_payload["quantity"] - 1.389) < 1e-6  # rounded 1.3888 → 1.389
 
     def test_order_not_filled_raises(self, broker):
         """A REJECTED order should raise RuntimeError."""

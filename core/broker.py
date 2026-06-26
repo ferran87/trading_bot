@@ -196,6 +196,14 @@ class Trading212Broker:
     _ORDER_POLL_INTERVAL_SEC = 2.0
     _ORDER_POLL_TIMEOUT_SEC = 120.0
 
+    # T212 enforces a per-instrument max fractional-quantity precision that it
+    # does NOT expose in instrument metadata. Some tickers (e.g. KO) reject 4
+    # decimals with HTTP 400 quantity-precision-mismatch while accepting 3.
+    # Since the limit is a maximum, submitting 3 dp satisfies every fractional
+    # instrument in the bots' universe (US + EU stocks). See 2026-06-26 KO
+    # investigation. Bump down further only if a 0/1/2-dp-only instrument appears.
+    _QTY_DECIMALS = 3
+
     def __init__(self, demo: bool | None = None, owner: str | None = None) -> None:
         if demo is None:
             demo = os.environ.get("T212_DEMO", "1") == "1"
@@ -433,11 +441,11 @@ class Trading212Broker:
         t212_ticker = self._resolve_ticker(order.ticker)
         ccy = self._instrument_currency(order.ticker)
 
-        # Fractional shares: T212 accepts non-integer quantities natively.
-        # Strategies already round to 4 decimals (e.g. 1.9422 shares); we
-        # only guard against dust orders (< 0.01 share) which T212 may
-        # reject as below the minimum notional.
-        qty = round(abs(order.qty), 4)
+        # Fractional shares: T212 accepts non-integer quantities natively, but
+        # caps the decimal precision per instrument (see _QTY_DECIMALS). We
+        # round to that precision and guard against dust orders (< 0.01 share)
+        # which T212 may reject as below the minimum notional.
+        qty = round(abs(order.qty), self._QTY_DECIMALS)
         if qty < 0.01:
             log.warning(
                 "Trading212Broker: %s %s qty %.4f below 0.01 dust threshold — skipping",
@@ -566,13 +574,13 @@ class Trading212Broker:
         """Return a pending Fill using the reference price when the order is live
         but the market is closed.
 
-        Records the fractional qty exactly as sent to T212 (rounded to 4
-        decimals to match the broker's accepted precision).  T212 supports
+        Records the fractional qty exactly as sent to T212 (rounded to
+        _QTY_DECIMALS to match the broker's accepted precision).  T212 supports
         fractional shares natively; recording the exact submitted qty keeps
         the virtual book aligned with the actual T212 position.
         """
         from datetime import datetime, timezone
-        qty = round(abs(order.qty), 4)
+        qty = round(abs(order.qty), self._QTY_DECIMALS)
         return Fill(
             ticker=order.ticker,
             side=order.side,
