@@ -665,19 +665,9 @@ def _render_run_logs(bots_subset: pd.DataFrame) -> None:
 
 
 def _render_reconciliation(bots_subset: pd.DataFrame, mode: str) -> None:
-    bot_ids = tuple(int(i) for i in bots_subset["id"])
+    if CONFIG.broker_backend != "t212":
+        return
 
-    if CONFIG.broker_backend == "t212":
-        _render_reconciliation_t212(bots_subset, bot_ids, mode)
-
-
-def _render_reconciliation_t212(
-    bots_subset: pd.DataFrame,
-    bot_ids: tuple[int, ...],
-    mode: str,
-) -> None:
-    """Reconciliation panel for T212 backend: compares SQLite vs live T212 portfolio."""
-    demo = (mode == "paper")
     # bots_subset is already filtered to a single owner upstream, so any bot's
     # owner is the right T212 account to reconcile against.
     owner: str | None = None
@@ -685,6 +675,28 @@ def _render_reconciliation_t212(
         owners = [o for o in bots_subset["owner"].unique() if isinstance(o, str) and o]
         if owners:
             owner = owners[0]
+
+    # Reconcile against ALL of the owner's bots for this mode — enabled AND
+    # disabled.  A disabled bot still owns its open T212 positions; leaving it
+    # out would surface those holdings as phantom "només a T212" errors.
+    if owner is not None:
+        mode_bots = bots_df[
+            (bots_df["owner"] == owner) & (bots_df["trading_mode"] == mode)
+        ]
+        bot_ids = tuple(int(i) for i in mode_bots["id"])
+    else:
+        bot_ids = tuple(int(i) for i in bots_subset["id"])
+
+    _render_reconciliation_t212(bot_ids, owner, mode)
+
+
+def _render_reconciliation_t212(
+    bot_ids: tuple[int, ...],
+    owner: str | None,
+    mode: str,
+) -> None:
+    """Reconciliation panel for T212 backend: compares SQLite vs live T212 portfolio."""
+    demo = (mode == "paper")
 
     with st.expander("🔍 Reconciliació SQLite ↔ T212"):
         col_refresh, col_info = st.columns([1, 4])
@@ -754,6 +766,77 @@ def _render_reconciliation_t212(
                 )
             if help_text:
                 st.caption(help_text)
+
+        _render_t212_sync_button(bot_ids, demo, owner, mode)
+
+
+def _render_t212_sync_button(
+    bot_ids: tuple[int, ...],
+    demo: bool,
+    owner: str | None,
+    mode: str,
+) -> None:
+    """Two-step 'sync to T212' action: applies T212 as the source of truth.
+
+    Adjusts qty mismatches, closes positions T212 no longer holds, and creates
+    positions T212 holds that no bot knows about — but only when each change is
+    unambiguously attributable to one bot.  Ambiguous cases (a ticker held by
+    2+ of the owner's bots, or an orphan when the account has several bots) are
+    reported, never guessed.
+    """
+    st.divider()
+    st.caption(
+        "**Sincronitzar** aplica T212 com a font de veritat: ajusta quantitats, "
+        "tanca posicions que ja no hi són i crea les que falten. "
+        "Els casos ambigus (mateix ticker en 2+ bots, o orfes amb diversos bots) "
+        "es deixen sense tocar."
+    )
+    confirm_key = f"recon_sync_confirm_{mode}"
+
+    if not st.session_state.get(confirm_key):
+        if st.button("🔧 Sincronitza amb T212", key=f"recon_sync_{mode}"):
+            st.session_state[confirm_key] = True
+            st.rerun()
+        return
+
+    st.warning("⚠️ Això modifica els llibres virtuals (SQLite). Segur?")
+    col_yes, col_no = st.columns(2)
+    with col_yes:
+        if st.button("✅ Sí, sincronitza", key=f"recon_sync_yes_{mode}"):
+            from agents.reconciliation import sync_t212_positions
+            result = sync_t212_positions(list(bot_ids), demo=demo, owner=owner)
+            st.session_state[confirm_key] = False
+            _reconcile_t212_cached.clear()
+
+            if result.get("error"):
+                st.error(f"❌ No s'ha pogut sincronitzar: {result['error']}")
+                return
+
+            applied = result.get("applied", [])
+            skipped = result.get("skipped", [])
+            if applied:
+                lines = "\n".join(
+                    f"- **{a['ticker']}** (bot {a['bot_id']}): {a['action']} "
+                    f"{a['from']:.4f} → {a['to']:.4f}"
+                    for a in applied
+                )
+                st.success(f"✅ {len(applied)} canvi(s) aplicats:\n{lines}")
+            else:
+                st.info("No s'ha aplicat cap canvi automàtic.")
+            if skipped:
+                lines = "\n".join(
+                    f"- **{s['ticker']}**: {s['reason']} "
+                    f"(SQLite {s['sqlite_qty']:.4f} · T212 {s['t212_qty']:.4f})"
+                    for s in skipped
+                )
+                st.warning(
+                    f"⚠️ {len(skipped)} cas(os) ambigus, no tocats "
+                    f"(resol-los manualment):\n{lines}"
+                )
+    with col_no:
+        if st.button("❌ Cancel·la", key=f"recon_sync_no_{mode}"):
+            st.session_state[confirm_key] = False
+            st.rerun()
 
         # Action guidance
         st.divider()
