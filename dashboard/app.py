@@ -767,7 +767,7 @@ def _render_reconciliation_t212(
             if help_text:
                 st.caption(help_text)
 
-        _render_t212_sync_button(bot_ids, demo, owner, mode)
+        _render_t212_sync_button(bot_ids, demo, owner, mode, discrepancies)
 
 
 def _render_t212_sync_button(
@@ -775,6 +775,7 @@ def _render_t212_sync_button(
     demo: bool,
     owner: str | None,
     mode: str,
+    discrepancies: list[dict],
 ) -> None:
     """Two-step 'sync to T212' action: applies T212 as the source of truth.
 
@@ -838,25 +839,25 @@ def _render_t212_sync_button(
             st.session_state[confirm_key] = False
             st.rerun()
 
-        # Action guidance
-        st.divider()
-        has_sqlite_only = any(d.get("issue") == "only_in_sqlite" for d in discrepancies)
-        has_t212_only   = any(d.get("issue") == "only_in_t212"   for d in discrepancies)
+    # Action guidance
+    st.divider()
+    has_sqlite_only = any(d.get("issue") == "only_in_sqlite" for d in discrepancies)
+    has_t212_only   = any(d.get("issue") == "only_in_t212"   for d in discrepancies)
 
-        if has_sqlite_only:
-            st.info(
-                "**Acció recomanada (SQLite té posicions que T212 no té):** "
-                "Comprova a T212 si la posició va arribar a obrir-se. "
-                "Si no, elimina la posició del SQLite manualment o espera que el bot "
-                "detecti la discrepància en la propera revisió diària."
-            )
-        if has_t212_only:
-            st.info(
-                "**Acció recomanada (T212 té posicions que SQLite no té):** "
-                "Aquestes posicions existeixen al compte real però el bot no les gestiona. "
-                "Si les vols incloure al virtual book, tanca-les manualment a T212 "
-                "o afegeix-les com a trades manuals al SQLite."
-            )
+    if has_sqlite_only:
+        st.info(
+            "**Acció recomanada (SQLite té posicions que T212 no té):** "
+            "Comprova a T212 si la posició va arribar a obrir-se. "
+            "Si no, elimina la posició del SQLite manualment o espera que el bot "
+            "detecti la discrepància en la propera revisió diària."
+        )
+    if has_t212_only:
+        st.info(
+            "**Acció recomanada (T212 té posicions que SQLite no té):** "
+            "Aquestes posicions existeixen al compte real però el bot no les gestiona. "
+            "Si les vols incloure al virtual book, tanca-les manualment a T212 "
+            "o afegeix-les com a trades manuals al SQLite."
+        )
 
 
 def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
