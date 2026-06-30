@@ -55,12 +55,25 @@ def run_orders(
     orders: Iterable[Order],
     snapshot: PortfolioSnapshot,
     today: date,
+    *,
+    max_concurrent: int | None = None,
 ) -> ExecutionReport:
     """Process all proposed orders for ONE bot, sequentially.
 
     The snapshot is refreshed between orders (via Portfolio.snapshot) so
     each order sees the state after the previous fills of the same run.
     We mutate the passed-in `snapshot` in place to keep it cheap.
+
+    ``max_concurrent`` — if set, a hard ceiling on the number of distinct open
+    positions for this bot.  A BUY that would OPEN A NEW ticker is rejected once
+    the book already holds ``max_concurrent`` names.  This is defence-in-depth
+    against the strategy's slot accounting: the strategy frees a slot by pairing
+    an exit SELL with an entry BUY, but if the broker rejects that SELL (market
+    closed, T212 400, dust) the slot is never actually freed.  Without this
+    guard the BUY still fills and the book creeps past the cap (observed on
+    2026-06-30: SELL AAPL rejected by T212, BUY NOW filled -> 11/10).  Because
+    SELLs are processed first and the snapshot is refreshed after every fill,
+    ``len(snapshot.positions)`` here reflects only the exits that truly executed.
     """
     report = ExecutionReport(bot_id=bot_id)
 
@@ -88,6 +101,24 @@ def run_orders(
                     bot_id, order.ticker, already.id,
                 )
                 report.rejected.append((order, "already bought this ticker today"))
+                continue
+
+            # Hard position-cap guard. Only blocks BUYs that OPEN A NEW ticker —
+            # scale-ins / pyramid adds to an existing holding don't consume a
+            # slot. snapshot.positions reflects exits that actually filled this
+            # run (SELLs sorted first + refreshed after each fill), so a
+            # slot-freeing SELL the broker rejected leaves no room here.
+            if (
+                max_concurrent is not None
+                and order.ticker not in snapshot.positions
+                and len(snapshot.positions) >= max_concurrent
+            ):
+                log.warning(
+                    "SKIPPED  bot=%d BUY %s — position cap reached (%d/%d open); "
+                    "a slot-freeing SELL did not execute this run",
+                    bot_id, order.ticker, len(snapshot.positions), max_concurrent,
+                )
+                report.rejected.append((order, "position cap reached"))
                 continue
 
         decision = risk.check(session, order, snapshot, today)

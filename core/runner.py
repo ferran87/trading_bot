@@ -153,7 +153,10 @@ def run_bot(
     exec_error: Exception | None = None
     report: executor.ExecutionReport | None = None
     try:
-        report = executor.run_orders(session, broker, bot.id, orders, snapshot, today)
+        report = executor.run_orders(
+            session, broker, bot.id, orders, snapshot, today,
+            max_concurrent=max_concurrent,
+        )
     except Exception as exc:
         exec_error = exc
         log.warning("bot=%d executor raised: %s", bot.id, exc)
