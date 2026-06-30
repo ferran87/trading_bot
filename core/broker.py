@@ -204,6 +204,24 @@ class Trading212Broker:
     # investigation. Bump down further only if a 0/1/2-dp-only instrument appears.
     _QTY_DECIMALS = 3
 
+    def _quantize_qty(self, order: Order) -> float:
+        """Quantize an order qty to T212's per-instrument precision.
+
+        SELLs are FLOORED, never rounded: rounding a full-position exit up
+        (e.g. owned 10.0176 -> submitted 10.018) trips T212's
+        'selling-equity-not-owned' 400 and the exit silently fails, leaving the
+        position stuck (observed 2026-06-30 on AAPL/QCOM). Flooring keeps the
+        submitted qty <= the held qty; the tiny dust left over is cleared by the
+        next exit or by reconciliation. BUYs keep nearest rounding — cash-fit
+        already leaves headroom so a sub-cent overshoot is harmless.
+        """
+        import math
+        q = abs(order.qty)
+        factor = 10 ** self._QTY_DECIMALS
+        if order.side is Side.SELL:
+            return math.floor(q * factor) / factor
+        return round(q, self._QTY_DECIMALS)
+
     def __init__(self, demo: bool | None = None, owner: str | None = None) -> None:
         if demo is None:
             demo = os.environ.get("T212_DEMO", "1") == "1"
@@ -444,8 +462,9 @@ class Trading212Broker:
         # Fractional shares: T212 accepts non-integer quantities natively, but
         # caps the decimal precision per instrument (see _QTY_DECIMALS). We
         # round to that precision and guard against dust orders (< 0.01 share)
-        # which T212 may reject as below the minimum notional.
-        qty = round(abs(order.qty), self._QTY_DECIMALS)
+        # which T212 may reject as below the minimum notional. SELLs floor so we
+        # never submit more than the held qty (see _quantize_qty).
+        qty = self._quantize_qty(order)
         if qty < 0.01:
             log.warning(
                 "Trading212Broker: %s %s qty %.4f below 0.01 dust threshold — skipping",
@@ -574,13 +593,13 @@ class Trading212Broker:
         """Return a pending Fill using the reference price when the order is live
         but the market is closed.
 
-        Records the fractional qty exactly as sent to T212 (rounded to
-        _QTY_DECIMALS to match the broker's accepted precision).  T212 supports
+        Records the fractional qty exactly as sent to T212 (quantized via
+        _quantize_qty to match the broker's accepted precision).  T212 supports
         fractional shares natively; recording the exact submitted qty keeps
         the virtual book aligned with the actual T212 position.
         """
         from datetime import datetime, timezone
-        qty = round(abs(order.qty), self._QTY_DECIMALS)
+        qty = self._quantize_qty(order)
         return Fill(
             ticker=order.ticker,
             side=order.side,

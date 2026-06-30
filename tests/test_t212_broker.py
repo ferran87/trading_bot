@@ -317,6 +317,24 @@ class TestPlaceMarketOrderEdgeCases:
         sent_payload = mock_post.call_args.kwargs.get("json") or mock_post.call_args.args[1]
         assert abs(sent_payload["quantity"] - 1.389) < 1e-6  # rounded 1.3888 → 1.389
 
+    def test_sell_qty_floored_not_rounded_up(self, broker):
+        """SELLs must FLOOR to 3 dp, never round up: submitting more than the
+        held qty (e.g. owned 1.3886 -> rounded 1.389) triggers T212's
+        'selling-equity-not-owned' 400 and the exit silently fails
+        (regression for 2026-06-30 AAPL/QCOM)."""
+        order_resp = {
+            "id": 78, "ticker": "AAPL_US_EQ", "status": "FILLED",
+            "filledQuantity": 1.388, "filledPrice": 70.0,
+            "limitPrice": None, "stopPrice": None,
+            "filledValue": 97.16, "taxes": [],
+        }
+        order = _order(ticker="AAPL", side=Side.SELL, qty=1.3886)  # would round UP to 1.389
+        with patch("requests.post", return_value=_mock_response(order_resp)) as mock_post:
+            broker.place_market_order(order)
+        sent_payload = mock_post.call_args.kwargs.get("json") or mock_post.call_args.args[1]
+        # Negative qty (SELL) and magnitude floored to 1.388, not rounded to 1.389.
+        assert abs(sent_payload["quantity"] - (-1.388)) < 1e-6
+
     def test_order_not_filled_raises(self, broker):
         """A REJECTED order should raise RuntimeError."""
         order_resp = {
