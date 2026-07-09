@@ -126,6 +126,14 @@ class RsiCompoundStrategy(Strategy):
         rsi_trail_mid  = float(params.get("rsi_trail_mid", 70.0))
         rsi_trail_tight = float(params.get("rsi_trail_tight", 80.0))
 
+        # Stall tightening: when a profitable position makes no new EUR peak
+        # for `stall_days` sessions, tighten the trail to `trail_pct_stall`.
+        # A winner that stops advancing is dead money occupying a slot; this
+        # locks in gains sooner without cutting names still climbing. Disabled
+        # by default (stall_days=0) so live behaviour is unchanged until tuned.
+        stall_days     = int(params.get("stall_days", 0))
+        trail_stall    = float(params.get("trail_pct_stall", trail))
+
         mkt_ticker       = params.get("market_filter_ticker")
         mkt_rsi_below    = float(params.get("market_rsi_was_below", 30))
         mkt_rsi_lookback = int(params.get("market_rsi_lookback_days", lookback_days))
@@ -183,13 +191,25 @@ class RsiCompoundStrategy(Strategy):
 
                     active = _active_trail(rsi_now, trail, trail_mid, trail_tight,
                                            rsi_trail_mid, rsi_trail_tight)
+
+                    # Tighten further if the position has stalled (no new EUR
+                    # peak for stall_days sessions). Uses bar count, not calendar
+                    # days, so it is holiday/weekend agnostic.
+                    stall_note = ""
+                    if stall_days > 0 and trail_stall < active:
+                        peak_ts = since_entry_eur.idxmax()
+                        bars_since_peak = int((since_entry_eur.index > peak_ts).sum())
+                        if bars_since_peak >= stall_days:
+                            active = trail_stall
+                            stall_note = f", stalled {bars_since_peak}d"
+
                     drawdown_eur = price_eur / peak_eur - 1.0
 
                     if drawdown_eur <= -active:
                         rsi_label = f"{rsi_now:.0f}" if rsi_now == rsi_now else "n/a"
                         exit_reason = (
                             f"trailing stop {drawdown_eur*100:.1f}% from EUR peak "
-                            f"(RSI={rsi_label} -> trail={active*100:.0f}%, "
+                            f"(RSI={rsi_label} -> trail={active*100:.0f}%{stall_note}, "
                             f"peak=EUR{peak_eur:.2f}, now=EUR{price_eur:.2f}, gain={gain*100:.1f}%)"
                         )
 

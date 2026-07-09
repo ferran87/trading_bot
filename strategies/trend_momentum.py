@@ -179,6 +179,12 @@ class TrendMomentumStrategy(Strategy):
         market_sma       = int(params.get("market_sma_period", 200))
         trail_pct        = float(params.get("trail_pct", 0.15))
         cat_stop         = float(params.get("catastrophic_stop", -0.15))
+        # Stall tightening: when a profitable position makes no new EUR peak for
+        # `stall_days` sessions, tighten the trail to `trail_pct_stall`. Locks in
+        # gains on dead-money winners without cutting names still climbing.
+        # Disabled by default (stall_days=0) so live behaviour is unchanged.
+        stall_days       = int(params.get("stall_days", 0))
+        trail_stall      = float(params.get("trail_pct_stall", trail_pct))
         trend_break_days = int(params.get("trend_break_days", 2))
         max_days         = int(params.get("max_days_held", 60))
         max_concurrent   = int(params.get("max_concurrent", 10))
@@ -245,10 +251,22 @@ class TrendMomentumStrategy(Strategy):
                     peak_eur = float(since_entry_eur.max())
                     price_eur = float(eur_close.dropna().iloc[-1])
                     drawdown_eur = price_eur / peak_eur - 1.0
-                    if drawdown_eur <= -trail_pct:
+
+                    # Tighten the trail if the position has stalled — no new EUR
+                    # peak for stall_days sessions. Bar count, not calendar days.
+                    active_trail = trail_pct
+                    stall_note = ""
+                    if stall_days > 0 and trail_stall < trail_pct:
+                        peak_ts = since_entry_eur.idxmax()
+                        bars_since_peak = int((since_entry_eur.index > peak_ts).sum())
+                        if bars_since_peak >= stall_days:
+                            active_trail = trail_stall
+                            stall_note = f", stalled {bars_since_peak}d"
+
+                    if drawdown_eur <= -active_trail:
                         exit_reason = (
                             f"trailing stop {drawdown_eur*100:.1f}% from EUR peak "
-                            f"(trail={trail_pct*100:.0f}%, "
+                            f"(trail={active_trail*100:.0f}%{stall_note}, "
                             f"peak=EUR{peak_eur:.2f}, gain={gain*100:.1f}%)"
                         )
 
