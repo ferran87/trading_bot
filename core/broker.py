@@ -205,21 +205,33 @@ class Trading212Broker:
     _QTY_DECIMALS = 3
 
     def _quantize_qty(self, order: Order) -> float:
-        """Quantize an order qty to T212's per-instrument precision.
+        """Quantize an order qty for submission to T212.
 
-        SELLs are FLOORED, never rounded: rounding a full-position exit up
-        (e.g. owned 10.0176 -> submitted 10.018) trips T212's
-        'selling-equity-not-owned' 400 and the exit silently fails, leaving the
-        position stuck (observed 2026-06-30 on AAPL/QCOM). Flooring keeps the
-        submitted qty <= the held qty; the tiny dust left over is cleared by the
-        next exit or by reconciliation. BUYs keep nearest rounding — cash-fit
-        already leaves headroom so a sub-cent overshoot is harmless.
+        BUYs are rounded to _QTY_DECIMALS. T212 rejects 4-dp quantities for some
+        instruments (e.g. KO) with a quantity-precision-mismatch 400, and cash-fit
+        already leaves headroom so a sub-cent rounding overshoot is harmless.
+
+        SELLs submit the EXACT held qty — no rounding, no flooring. A sell's qty
+        is the whole position (full exit) or a slice of it, so it can never exceed
+        what is owned; quantizing it is both unnecessary and actively harmful:
+
+          * round() pushed a full exit UP past the held qty (owned 10.0176 ->
+            10.018) and tripped 'selling-equity-not-owned' 400.
+          * floor() (the 2026-06-30 attempt to fix that) pushed it DOWN (10.0176
+            -> 10.017), stranding a sub-1-share residual that T212 then rejects
+            with 'min-opened-position-exceeded: must have opened position at
+            least 1.00'. The exit fails on every run and the position sticks
+            (observed 2026-07-06..09 on CAT / QCOM / ASML.AS).
+
+        Submitting the exact held qty closes the position to a zero residual and
+        cannot over-sell. The virtual book is kept in lock-step with T212 by the
+        reconciliation pass so order.qty equals T212's held qty, and Python emits
+        its shortest decimal form (3.2823, not 3.28229999) so no float dust
+        reaches the wire.
         """
-        import math
         q = abs(order.qty)
-        factor = 10 ** self._QTY_DECIMALS
         if order.side is Side.SELL:
-            return math.floor(q * factor) / factor
+            return q
         return round(q, self._QTY_DECIMALS)
 
     def __init__(self, demo: bool | None = None, owner: str | None = None) -> None:
@@ -459,11 +471,11 @@ class Trading212Broker:
         t212_ticker = self._resolve_ticker(order.ticker)
         ccy = self._instrument_currency(order.ticker)
 
-        # Fractional shares: T212 accepts non-integer quantities natively, but
-        # caps the decimal precision per instrument (see _QTY_DECIMALS). We
-        # round to that precision and guard against dust orders (< 0.01 share)
-        # which T212 may reject as below the minimum notional. SELLs floor so we
-        # never submit more than the held qty (see _quantize_qty).
+        # Fractional shares: T212 accepts non-integer quantities natively. BUYs
+        # are rounded to _QTY_DECIMALS (per-instrument precision cap); SELLs
+        # submit the exact held qty so a full exit closes to a zero residual
+        # (see _quantize_qty). Dust orders (< 0.01 share) are skipped — T212 may
+        # reject them as below the minimum notional.
         qty = self._quantize_qty(order)
         if qty < 0.01:
             log.warning(

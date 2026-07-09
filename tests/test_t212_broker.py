@@ -317,23 +317,42 @@ class TestPlaceMarketOrderEdgeCases:
         sent_payload = mock_post.call_args.kwargs.get("json") or mock_post.call_args.args[1]
         assert abs(sent_payload["quantity"] - 1.389) < 1e-6  # rounded 1.3888 → 1.389
 
-    def test_sell_qty_floored_not_rounded_up(self, broker):
-        """SELLs must FLOOR to 3 dp, never round up: submitting more than the
-        held qty (e.g. owned 1.3886 -> rounded 1.389) triggers T212's
-        'selling-equity-not-owned' 400 and the exit silently fails
-        (regression for 2026-06-30 AAPL/QCOM)."""
+    def test_sell_submits_exact_qty_not_rounded_or_floored(self, broker):
+        """SELLs submit the EXACT held qty — neither rounded up nor floored.
+
+        Rounding up (owned 1.3886 -> 1.389) over-sells and trips T212's
+        'selling-equity-not-owned' 400. Flooring (-> 1.388) strands a sub-1-share
+        residual that trips 'min-opened-position-exceeded' and leaves the position
+        stuck (observed 2026-07-06..09 on CAT/QCOM/ASML.AS). Submitting the exact
+        held qty closes to a zero residual and cannot over-sell."""
         order_resp = {
             "id": 78, "ticker": "AAPL_US_EQ", "status": "FILLED",
-            "filledQuantity": 1.388, "filledPrice": 70.0,
+            "filledQuantity": 1.3886, "filledPrice": 70.0,
             "limitPrice": None, "stopPrice": None,
-            "filledValue": 97.16, "taxes": [],
+            "filledValue": 97.20, "taxes": [],
         }
-        order = _order(ticker="AAPL", side=Side.SELL, qty=1.3886)  # would round UP to 1.389
+        order = _order(ticker="AAPL", side=Side.SELL, qty=1.3886)  # full held qty, 4 dp
         with patch("requests.post", return_value=_mock_response(order_resp)) as mock_post:
             broker.place_market_order(order)
         sent_payload = mock_post.call_args.kwargs.get("json") or mock_post.call_args.args[1]
-        # Negative qty (SELL) and magnitude floored to 1.388, not rounded to 1.389.
-        assert abs(sent_payload["quantity"] - (-1.388)) < 1e-6
+        # Negative qty (SELL) with the exact held magnitude 1.3886 — not 1.389, not 1.388.
+        assert abs(sent_payload["quantity"] - (-1.3886)) < 1e-9
+
+    def test_sell_full_position_leaves_zero_residual(self, broker):
+        """Regression for the 2026-07 dust-residual bug: a full exit of a 4-dp
+        holding (3.2823) must submit 3.2823 so T212 closes it to exactly 0,
+        rather than 3.282 (floored) which leaves 0.0003 shares T212 rejects."""
+        order_resp = {
+            "id": 79, "ticker": "AAPL_US_EQ", "status": "FILLED",
+            "filledQuantity": 3.2823, "filledPrice": 350.0,
+            "limitPrice": None, "stopPrice": None,
+            "filledValue": 1149.0, "taxes": [],
+        }
+        order = _order(ticker="AAPL", side=Side.SELL, qty=3.2823, ref_price_eur=320.0)
+        with patch("requests.post", return_value=_mock_response(order_resp)) as mock_post:
+            broker.place_market_order(order)
+        sent_payload = mock_post.call_args.kwargs.get("json") or mock_post.call_args.args[1]
+        assert abs(sent_payload["quantity"] - (-3.2823)) < 1e-9
 
     def test_order_not_filled_raises(self, broker):
         """A REJECTED order should raise RuntimeError."""
