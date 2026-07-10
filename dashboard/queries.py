@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import date, timedelta
 
 import pandas as pd
 import streamlit as st
@@ -371,13 +372,24 @@ def _trades(limit: int = 500) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=60)
-def _run_logs(limit: int = 100) -> pd.DataFrame:
+def _run_logs(days: int = 60, max_rows: int = 2000) -> pd.DataFrame:
+    """Fetch run logs from the last ``days`` days across all bots.
+
+    Uses a date window rather than a global row cap. With 6+ bots each writing
+    several run-logs per day, a small fixed LIMIT (was 100) crowds out any single
+    owner's recent history: the AI trade-explanations for less-active bots would
+    age out of the window and their dashboard section would disappear even though
+    the rows still exist. ``max_rows`` is only a safety valve against unbounded
+    growth, not the primary bound.
+    """
+    cutoff = date.today() - timedelta(days=days)
     with get_session() as s:
         rows = (
             s.query(RunLog, Bot.name)
             .join(Bot, RunLog.bot_id == Bot.id)
+            .filter(RunLog.run_date >= cutoff)
             .order_by(RunLog.timestamp.desc())
-            .limit(limit)
+            .limit(max_rows)
             .all()
         )
         data = [
