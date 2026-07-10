@@ -519,45 +519,69 @@ def _resolve_t212_pending_orders() -> None:
         log.warning("_resolve_t212_pending_orders failed (non-fatal): %s", exc)
 
 
-def _log_t212_reconciliation(bot_ids: list[int], demo: bool = True) -> None:
-    """Compare SQLite positions vs live T212 account(s) and log any mismatches.
+def _auto_reconcile_t212(bot_ids: list[int]) -> None:
+    """Reconcile SQLite books against live T212 and AUTO-CORRECT any drift.
 
-    Log-only, non-blocking.  Mismatches appear as WARNING in the run log
-    and in the dashboard '🔍 Reconciliació' expander.
+    Runs once per bot run, pre-trade, after pending orders are resolved. Unlike
+    the previous log-only pass this makes the virtual book match T212 (the source
+    of truth) automatically, so phantom/duplicate positions left by a crashed run
+    (broker placed the order but the DB write died) can't drive bad orders or hog
+    a slot on the next run. Correcting BEFORE the strategies compute orders means
+    a synced-away position frees its slot the same run.
 
-    Called once per daily run after pending orders are resolved.  Each owner
-    has its own T212 account so we group bot_ids by owner and reconcile
-    each owner's bots against that owner's T212 account separately.
+    Corrections are delegated to ``sync_t212_positions`` (T212 = truth), which:
+      * closes positions T212 no longer holds (phantom exits),
+      * adjusts a single bot's qty to the T212 qty (duplicate/partial fills),
+      * skips anything ambiguous across 2+ bots sharing an account (logged for
+        manual review).
+    Bots are grouped by (owner, trading_mode) so each T212 account — demo vs
+    live, per owner — is reconciled only against its own bots. Non-blocking:
+    any failure (incl. a T212 fetch error, which applies NO changes) is logged
+    and the trading run continues.
+
+    Caveat: a SELL placed pre-market and still *resting* at T212 keeps showing
+    in the T212 portfolio while the book already applied it optimistically —
+    syncing then could re-create it. The daily 08:00 cadence avoids this (pre-market
+    orders fill overnight before the next run), but repeated same-day manual runs
+    can momentarily fight a resting order.
     """
     try:
-        from agents.reconciliation import reconcile_t212_positions
-        # Group bot_ids by owner so each T212 account only sees its own bots.
-        owner_to_bots: dict[str | None, list[int]] = {}
+        from agents.reconciliation import sync_t212_positions
+        # Group by (owner, trading_mode): each combo is a distinct T212 account
+        # (demo vs live) with its own credentials and holdings.
+        groups: dict[tuple[str | None, str], list[int]] = {}
         with get_session() as _s:
             for b in _s.query(Bot).filter(Bot.id.in_(bot_ids)).all():
                 owner = (b.owner or "").strip() or None
-                owner_to_bots.setdefault(owner, []).append(b.id)
+                mode = (getattr(b, "trading_mode", "paper") or "paper").strip().lower()
+                groups.setdefault((owner, mode), []).append(b.id)
 
-        any_mismatch = False
-        for owner, ids in owner_to_bots.items():
-            discrepancies = reconcile_t212_positions(ids, demo=demo, owner=owner)
-            if discrepancies:
-                any_mismatch = True
-                for d in discrepancies:
-                    log.warning(
-                        "T212 reconciliation [%s]: %-8s  SQLite=%.2f  T212=%.2f  diff=%+.2f  [%s]",
-                        owner or "default", d["yf_ticker"],
-                        d["sqlite_qty"], d["t212_qty"], d["diff"], d["issue"],
-                    )
-            else:
-                log.info(
-                    "T212 reconciliation [%s]: OK — all %d position(s) match between SQLite and T212",
-                    owner or "default", len(ids),
+        for (owner, mode), ids in groups.items():
+            tag = f"{owner or 'default'}/{mode}"
+            result = sync_t212_positions(ids, demo=(mode != "live"), owner=owner)
+            if result.get("error"):
+                log.warning("T212 auto-sync [%s]: fetch failed, NO changes applied: %s",
+                            tag, result["error"])
+                continue
+            applied = result.get("applied", [])
+            skipped = result.get("skipped", [])
+            if not applied and not skipped:
+                log.info("T212 auto-sync [%s]: OK — %d bot(s) already match T212",
+                         tag, len(ids))
+            for a in applied:
+                log.warning(
+                    "T212 auto-sync [%s]: %-8s bot=%d %s %.4f -> %.4f",
+                    tag, a["ticker"], a["bot_id"], a["action"], a["from"], a["to"],
                 )
-        if any_mismatch:
-            log.warning("T212 reconciliation: at least one account has mismatches — see above")
+            for sk in skipped:
+                log.warning(
+                    "T212 auto-sync [%s]: SKIPPED %-8s (%s) SQLite=%.4f T212=%.4f "
+                    "— ambiguous, needs manual review",
+                    tag, sk["ticker"], sk["reason"],
+                    sk.get("sqlite_qty", 0.0), sk.get("t212_qty", 0.0),
+                )
     except Exception as exc:
-        log.debug("_log_t212_reconciliation: failed (non-fatal): %s", exc)
+        log.warning("_auto_reconcile_t212: failed (non-fatal): %s", exc)
 
 
 def _recompute_position(session, bot_id: int, ticker: str) -> None:
@@ -641,18 +665,17 @@ def run_once(
     # ── Pre-run: resolve any pending orders from previous sessions ─────────────
     if CONFIG.broker_backend == "t212":
         _resolve_t212_pending_orders()
-        # Log position reconciliation after pending orders are resolved.
-        # Uses the enabled paper bots as the reference set.
+        # Auto-reconcile the virtual books against live T212 (source of truth)
+        # after pending orders are resolved and BEFORE the bots trade, so
+        # phantom/duplicate positions from a crashed run get corrected (and their
+        # slots freed) this run. Covers every enabled bot — paper AND live.
         try:
             with get_session() as _rec_s:
-                _paper_ids = [
-                    b.id for b in _rec_s.query(Bot).all()
-                    if b.enabled and getattr(b, "trading_mode", "paper") == "paper"
-                ]
-            if _paper_ids:
-                _log_t212_reconciliation(_paper_ids, demo=True)
+                _recon_ids = [b.id for b in _rec_s.query(Bot).all() if b.enabled]
+            if _recon_ids:
+                _auto_reconcile_t212(_recon_ids)
         except Exception as _rec_exc:
-            log.debug("run_once: T212 reconciliation skipped: %s", _rec_exc)
+            log.debug("run_once: T212 auto-reconcile skipped: %s", _rec_exc)
 
     # ── Pre-run: sync T212 account balance → per-bot initial capital ───────────
     # For fresh bots (no trades yet) the virtual book cash equals
