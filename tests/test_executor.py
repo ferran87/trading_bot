@@ -120,3 +120,33 @@ def test_rejected_order_not_recorded(db_session):
     final = Portfolio.snapshot(db_session, 1, {})
     assert final.cash_eur == 1000.0   # untouched
     assert not final.positions
+
+
+class _OrphanOpenOrderBroker(MockBroker):
+    """Reports an unrecorded open BUY order for SXR8.DE — an orphan a crashed run
+    left live at the broker, so the executor must not place another."""
+
+    def find_unrecorded_open_order(self, ticker, side, recorded_ids):
+        if ticker == "SXR8.DE" and side == "BUY":
+            return "ORPHAN-123"
+        return None
+
+
+def test_dedup_guard_skips_unrecorded_open_broker_order(db_session):
+    broker = _OrphanOpenOrderBroker(seed=None)
+    today = date.today()
+    snap = Portfolio.snapshot(db_session, 1, {})
+
+    report = executor.run_orders(
+        db_session, broker, 1,
+        [_order(Side.BUY, "SXR8.DE", 1, 200.0)],
+        snap, today,
+    )
+    db_session.commit()
+
+    # Placement was skipped — no fill; recorded as a rejection with the guard reason.
+    assert len(report.approved) == 0
+    assert len(report.rejected) == 1
+    assert "unrecorded broker order" in report.rejected[0][1]
+    # Book untouched — no duplicate position created.
+    assert "SXR8.DE" not in Portfolio.snapshot(db_session, 1, {}).positions

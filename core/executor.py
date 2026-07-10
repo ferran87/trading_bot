@@ -80,7 +80,35 @@ def run_orders(
     # Process SELLs first so freed cash is available for BUYs in the same run.
     sorted_orders = sorted(orders, key=lambda o: 0 if o.side.value == "SELL" else 1)
 
+    # Every broker_order_id we have on record. Used by the crash-safe dedup guard
+    # below to tell an orphan open order (placed at the broker but never recorded
+    # because a crash killed the DB write) from one we already know about.
+    recorded_order_ids = {
+        str(r[0])
+        for r in session.query(TradeModel.broker_order_id)
+        .filter(TradeModel.broker_order_id.isnot(None))
+        .all()
+    }
+
     for order in sorted_orders:
+        # Crash-safe dedup against the BROKER's own open orders. The DB guard
+        # below trusts our records, but a crash between placing the order and
+        # committing the fill leaves an order live at the broker with no DB row —
+        # the next run then re-places it (the 2026-07-09 META duplicate: bot 10
+        # bought META twice at T212). If the broker still has an open order for
+        # this ticker+side that we never recorded, don't place another.
+        orphan_id = broker.find_unrecorded_open_order(
+            order.ticker, order.side.value, recorded_order_ids
+        )
+        if orphan_id:
+            log.warning(
+                "SKIPPED  bot=%d %s %s — unrecorded open broker order %s already "
+                "exists (orphan from a prior run); not re-placing to avoid a duplicate",
+                bot_id, order.side.value, order.ticker, orphan_id,
+            )
+            report.rejected.append((order, "duplicate: unrecorded broker order exists"))
+            continue
+
         # Guard: never place a second BUY for the same ticker on the same day.
         # This prevents duplicate orders when the bot runs multiple times (e.g.
         # scheduler fires + manual run) and the first order is still pending.

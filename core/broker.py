@@ -95,6 +95,15 @@ class BrokerInterface(Protocol):
     def disconnect(self) -> None: ...
     def place_market_order(self, order: Order) -> Fill: ...
 
+    def find_unrecorded_open_order(
+        self, ticker: str, side: str, recorded_ids: set[str]
+    ) -> str | None:
+        """Return the id of an OPEN broker order for ``ticker``+``side`` whose id
+        is not in ``recorded_ids`` (an order placed but never recorded in our DB —
+        an orphan from a crashed run), else None. Lets the executor avoid
+        re-placing a duplicate. Brokers without this notion return None."""
+        return None
+
 
 # --- MockBroker --------------------------------------------------------------
 
@@ -120,6 +129,12 @@ class MockBroker:
         return None
 
     def disconnect(self) -> None:
+        return None
+
+    def find_unrecorded_open_order(
+        self, ticker: str, side: str, recorded_ids: set[str]
+    ) -> str | None:
+        """MockBroker has no resting orders — never blocks a placement."""
         return None
 
     def place_market_order(self, order: Order) -> Fill:
@@ -244,6 +259,7 @@ class Trading212Broker:
         # the original single-account setup (Ferran's keys, pre-Antonio).
         self._owner = (owner or "").strip() or None
         self._instruments_cache: dict[str, dict] | None = None  # yf_ticker → T212 entry
+        self._open_orders_cache: list[dict] | None = None  # resting orders, fetched once/run
 
     @property
     def _base_url(self) -> str:
@@ -432,6 +448,47 @@ class Trading212Broker:
         return entry.get("currency", "EUR")
 
     # -- orders --
+
+    def _cached_open_orders(self) -> list[dict]:
+        """Fetch T212's currently open (resting / unfilled) orders once per run.
+
+        GET /equity/orders returns all open orders for the account. Cached on the
+        instance so the executor can cheaply check every proposed order. Returns
+        [] on any error so the duplicate guard fails safe (DB-only fallback).
+        """
+        if self._open_orders_cache is None:
+            try:
+                data = self._get("/equity/orders")
+                self._open_orders_cache = data if isinstance(data, list) else []
+            except Exception as exc:
+                log.warning(
+                    "Trading212Broker: open-orders fetch failed (%s); duplicate "
+                    "guard falls back to DB only", exc,
+                )
+                self._open_orders_cache = []
+        return self._open_orders_cache
+
+    def find_unrecorded_open_order(
+        self, ticker: str, side: str, recorded_ids: set[str]
+    ) -> str | None:
+        """See :class:`BrokerInterface`.
+
+        Matches an open T212 order on the resolved T212 ticker + side. An open
+        order whose id we have NOT recorded is an orphan from a crashed run (the
+        broker accepted it but our DB write died); re-placing would duplicate it.
+        """
+        try:
+            t212_ticker = self._resolve_ticker(ticker)
+        except Exception:
+            return None
+        want_side = side.strip().upper()
+        for o in self._cached_open_orders():
+            oid = str(o.get("id", ""))
+            if not oid or oid in recorded_ids:
+                continue
+            if o.get("ticker") == t212_ticker and str(o.get("side", "")).upper() == want_side:
+                return oid
+        return None
 
     def place_market_order(self, order: Order) -> Fill:
         """Place a T212 market order and wait for the fill.
