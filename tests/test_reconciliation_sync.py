@@ -97,3 +97,29 @@ def test_sync_creates_orphan_for_single_bot(db_session, _patched):
     ddd = db_session.query(Position).filter_by(bot_id=3, ticker="DDD").one()
     assert ddd.qty == pytest.approx(6.0)
     assert ddd.avg_entry_eur == pytest.approx(100.0)
+
+
+def test_sync_skips_excluded_tickers(db_session, _patched):
+    """A ticker in exclude_tickers (unresolved pending order) is deferred, not
+    synced — guards against reversing a still-resting order."""
+    from agents.reconciliation import sync_t212_positions
+
+    today = date.today()
+    db_session.add_all([
+        Position(bot_id=1, ticker="AAA", qty=5.0, avg_entry_eur=90.0, entry_date=today),
+        Position(bot_id=1, ticker="CCC", qty=4.0, avg_entry_eur=90.0, entry_date=today),
+    ])
+    db_session.commit()
+
+    # AAA has an unresolved pending order → must be left untouched this pass,
+    # even though T212 shows 7.0 vs the book's 5.0.
+    result = sync_t212_positions([1], demo=True, owner="X", exclude_tickers={"AAA"})
+    assert result["error"] is None
+
+    assert ("AAA", "pending_order") in {(s["ticker"], s["reason"]) for s in result["skipped"]}
+    assert ("AAA", "adjusted") not in {(a["ticker"], a["action"]) for a in result["applied"]}
+    assert ("CCC", "closed") in {(a["ticker"], a["action"]) for a in result["applied"]}
+
+    db_session.expire_all()
+    assert db_session.query(Position).filter_by(bot_id=1, ticker="AAA").one().qty == pytest.approx(5.0)
+    assert db_session.query(Position).filter_by(bot_id=1, ticker="CCC").first() is None

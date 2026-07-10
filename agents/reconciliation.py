@@ -206,8 +206,17 @@ def sync_t212_positions(
     bot_ids: list[int],
     demo: bool = True,
     owner: str | None = None,
+    exclude_tickers: set[str] | None = None,
 ) -> dict:
     """Make the SQLite virtual books match the live T212 account.
+
+    ``exclude_tickers`` — tickers to leave untouched this pass (reported under
+    ``skipped`` with reason ``pending_order``).  Used to skip any ticker with an
+    unresolved pending order: while an order is still resting at T212 the book
+    and the account legitimately disagree (a placed-but-unfilled BUY isn't in the
+    T212 portfolio yet; an optimistically-applied SELL already left the book), so
+    syncing would wrongly reverse it and desync a real position — the exact bug
+    that stranded bot 22's NOW on 2026-06-30.
 
     T212 is treated as the source of truth.  Three cases are handled:
 
@@ -230,6 +239,7 @@ def sync_t212_positions(
     from core.db import Position, get_session, utcnow
 
     bot_ids = [int(b) for b in bot_ids]
+    exclude = {str(t) for t in (exclude_tickers or set())}
 
     # ── Fetch live T212 portfolio ─────────────────────────────────────────────
     try:
@@ -281,6 +291,15 @@ def sync_t212_positions(
 
             if abs(sq_total - tq) < 1e-4:
                 continue  # already in sync
+
+            if ticker in exclude:
+                # An order for this ticker is still resting/unresolved — the
+                # book↔T212 disagreement is expected and transient. Defer.
+                skipped.append({
+                    "ticker": ticker, "reason": "pending_order",
+                    "sqlite_qty": sq_total, "t212_qty": tq,
+                })
+                continue
 
             # ── only_in_sqlite: T212 holds none → close every bot position ────
             if tq <= 1e-9:

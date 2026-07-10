@@ -556,9 +556,20 @@ def _auto_reconcile_t212(bot_ids: list[int]) -> None:
                 mode = (getattr(b, "trading_mode", "paper") or "paper").strip().lower()
                 groups.setdefault((owner, mode), []).append(b.id)
 
+        from core.db import Trade
         for (owner, mode), ids in groups.items():
             tag = f"{owner or 'default'}/{mode}"
-            result = sync_t212_positions(ids, demo=(mode != "live"), owner=owner)
+            # Skip any ticker with an unresolved pending order: while an order is
+            # still resting at T212 the book and account legitimately disagree, so
+            # syncing would reverse it (this is what stranded bot 22's NOW).
+            with get_session() as _ps:
+                pending = {
+                    t.ticker for t in _ps.query(Trade.ticker)
+                    .filter(Trade.bot_id.in_(ids), Trade.status == "pending").all()
+                }
+            result = sync_t212_positions(
+                ids, demo=(mode != "live"), owner=owner, exclude_tickers=pending,
+            )
             if result.get("error"):
                 log.warning("T212 auto-sync [%s]: fetch failed, NO changes applied: %s",
                             tag, result["error"])
@@ -574,12 +585,19 @@ def _auto_reconcile_t212(bot_ids: list[int]) -> None:
                     tag, a["ticker"], a["bot_id"], a["action"], a["from"], a["to"],
                 )
             for sk in skipped:
-                log.warning(
-                    "T212 auto-sync [%s]: SKIPPED %-8s (%s) SQLite=%.4f T212=%.4f "
-                    "— ambiguous, needs manual review",
-                    tag, sk["ticker"], sk["reason"],
-                    sk.get("sqlite_qty", 0.0), sk.get("t212_qty", 0.0),
-                )
+                if sk["reason"] == "pending_order":
+                    log.info(
+                        "T212 auto-sync [%s]: deferred %-8s — pending order unresolved, "
+                        "will reconcile once it fills",
+                        tag, sk["ticker"],
+                    )
+                else:
+                    log.warning(
+                        "T212 auto-sync [%s]: SKIPPED %-8s (%s) SQLite=%.4f T212=%.4f "
+                        "— ambiguous, needs manual review",
+                        tag, sk["ticker"], sk["reason"],
+                        sk.get("sqlite_qty", 0.0), sk.get("t212_qty", 0.0),
+                    )
     except Exception as exc:
         log.warning("_auto_reconcile_t212: failed (non-fatal): %s", exc)
 
