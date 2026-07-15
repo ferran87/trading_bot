@@ -456,22 +456,39 @@ def _t212_get(
     lists HTTP codes treated as expected-empty (no WARNING log) — e.g. ``(403,)``
     for ``/equity/portfolio`` which returns 403 when the account is empty.
     """
+    import time
     import requests
     from core.t212_auth import t212_base_url
     headers = _t212_headers(demo, owner)
     if not headers:
         return None
     url = path_or_url if path_or_url.startswith("http") else f"{t212_base_url(demo)}/{path_or_url}"
-    try:
-        resp = requests.get(url, headers=headers, timeout=timeout, params=params)
-        if resp.status_code in swallow_status:
+    # T212 rate-limits shared accounts (bot run + dashboard polling hit the same
+    # account). Retry a few times on HTTP 429 with a short, Retry-After-aware
+    # backoff — mirrors Trading212Broker._get — so a transient limit doesn't
+    # surface to the user as a "check your credentials" error. Kept short so the
+    # Streamlit rerun doesn't hang.
+    _MAX_ATTEMPTS = 3
+    for attempt in range(_MAX_ATTEMPTS):
+        try:
+            resp = requests.get(url, headers=headers, timeout=timeout, params=params)
+            if resp.status_code in swallow_status:
+                return None
+            if resp.status_code == 429 and attempt < _MAX_ATTEMPTS - 1:
+                ra = resp.headers.get("Retry-After")
+                try:
+                    secs = float(ra) if ra is not None else 1.5
+                except (TypeError, ValueError):
+                    secs = 1.5
+                time.sleep(min(max(secs, 1.0), 4.0))
+                continue
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as exc:
+            log.warning("_t212_get(%s, demo=%s, owner=%s): %s",
+                        log_label or path_or_url, demo, owner, exc)
             return None
-        resp.raise_for_status()
-        return resp.json()
-    except Exception as exc:
-        log.warning("_t212_get(%s, demo=%s, owner=%s): %s",
-                    log_label or path_or_url, demo, owner, exc)
-        return None
+    return None
 
 
 @st.cache_data(ttl=300)

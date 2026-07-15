@@ -988,16 +988,30 @@ def _render_tab(bots_subset: pd.DataFrame, mode: str, equity_df: pd.DataFrame,
                     f"per a {t212_owner or 'aquest compte'} — secció T212 ocultada."
                 )
             else:
-                suffix = "PAPER" if t212_demo else "LIVE"
-                env_var = (
-                    f"T212_API_KEY_{suffix}_{t212_owner.upper()}" if t212_owner
-                    else f"T212_API_KEY_{suffix}"
-                )
-                st.warning(
-                    f"⚠️ No s'ha pogut connectar al compte T212{owner_label}.  "
-                    f"Comprova que **{env_var}** i el `_SECRET` corresponent estiguin "
-                    "definits a `.env` (o `secrets.toml` a Streamlit Cloud)."
-                )
+                # Distinguish a genuine missing-credential problem from a
+                # transient API failure (rate-limit / timeout). Both make
+                # _t212_account return None, but the fix is very different, so
+                # don't cry "check your keys" when the keys are actually fine.
+                from core.t212_auth import t212_headers as _t212_headers_check
+                creds_ok = _t212_headers_check(t212_demo, t212_owner) is not None
+                if creds_ok:
+                    st.warning(
+                        f"⚠️ No s'ha pogut obtenir les dades del compte T212{owner_label} "
+                        "ara mateix — l'API de Trading 212 no respon o ha limitat les "
+                        "peticions (rate-limit). Les credencials són correctes; torna-ho "
+                        "a provar d'aquí uns segons."
+                    )
+                else:
+                    suffix = "PAPER" if t212_demo else "LIVE"
+                    env_var = (
+                        f"T212_API_KEY_{suffix}_{t212_owner.upper()}" if t212_owner
+                        else f"T212_API_KEY_{suffix}"
+                    )
+                    st.warning(
+                        f"⚠️ No s'ha pogut connectar al compte T212{owner_label}.  "
+                        f"Comprova que **{env_var}** i el `_SECRET` corresponent estiguin "
+                        "definits a `.env` (o `secrets.toml` a Streamlit Cloud)."
+                    )
 
     st.markdown("#### 📂 Posicions obertes")
     if use_t212 and not t212_portfolio.empty:
